@@ -1,0 +1,11 @@
+{
+  "appId": "com.tactileai.app",
+  "appName": "TactileAI",
+  "webDir": "out",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
