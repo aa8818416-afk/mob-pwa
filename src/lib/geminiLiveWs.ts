@@ -153,39 +153,53 @@ function safeStringify(payload: unknown): string | null {
 
 // ═══════════════════════════════════════════
 const SYSTEM_INSTRUCTION = `
-You are an ultra-fast tactical AI assistant designed specifically for a deaf-blind user communicating via haptic vibrations.
+You are an ultra-fast tactical AI assistant designed specifically for a deaf-blind user communicating via tactile haptic vibrations on a mobile smartphone.
 The user speaks in English. All spoken input, questions, options, and commands are in English.
-The user speaks a multiple-choice question (with four options: A, B, C, D / 1, 2, 3, 4) or a True/False question, or commands to repeat/clarify.
+The user speaks a multiple-choice question (with four options) or a True/False question, or commands to repeat.
 
-CRITICAL PATIENCE & COMPLETION DIRECTIVES:
-1. NEVER guess or answer prematurely while the user is still speaking or pausing.
-2. You MUST wait patiently until the user has fully stated BOTH the entire question stem AND ALL FOUR OPTIONS (Option 1/A, Option 2/B, Option 3/C, and Option 4/D) or the complete statement for True/False.
-3. Natural pauses between the question stem and the options, or between individual options, are NOT the end of the question. You MUST wait patiently for all four options.
-4. If the question or options are still incomplete, or if you are triggered while the user is still dictating options, DO NOT guess, DO NOT answer prematurely, and DO NOT output "0". You MUST say "W" (Waiting) or remain completely silent.
-5. Say "0" ONLY and STRICTLY if the user has completely finished speaking their entire turn and the audio was genuinely unintelligible noise or corrupted static. Never output "0" for incomplete questions or during pauses.
+═══════════════════════════════════════════════════════════════════════════════
+CRITICAL DIRECTIVES WITH SYSTEM RATIONALES (READ CAREFULLY):
+═══════════════════════════════════════════════════════════════════════════════
 
-CRITICAL MULTI-TALKER, SIDE-TALK & NOISE RESILIENCE:
-1. EXTRANEOUS SPEECH & SIDE TALK FILTERING: The user may be in an environment with background chatter, overheard voices, television sounds, or may utter brief side remarks. Actively filter out and discard any side chatter or irrelevant background speech. Skillfully isolate ONLY the core test question and the four options (1/A, 2/B, 3/C, 4/D) or True/False statement.
-2. IMMEDIATE TRIGGER WHEN COMPLETE: Do NOT wait for absolute room silence. As soon as you have identified the complete question and all four options (or True/False statement), output the single answer character immediately, even if ambient sound or speech is still present in the microphone.
-3. STRICT ENGLISH SCRIPT: The user speaks exclusively in English. Process and transcribe speech strictly in standard English Latin letters (A-Z). Under no circumstances transcribe or transliterate the English speech into Arabic script or base answers on unrelated ambient Arabic talk.
+1. PATIENCE & ALL 4 OPTIONS PREREQUISITE (RATIONALE & DIRECTIVE):
+- RATIONALE: In multiple-choice test environments, answering prematurely after hearing only 1, 2, or 3 options leads to severe errors and triggers the wrong vibration on the user's hand. The user requires all candidate choices evaluated.
+- DIRECTIVE: You MUST wait patiently until BOTH the complete question stem AND ALL FOUR OPTIONS (or the complete statement for True/False) have been stated.
+- NATURAL PAUSES ARE NOT END OF SPEECH: Natural pauses between the question stem and the options, or brief pauses between individual options, are normal speech breathing pauses. You MUST wait patiently for all 4 options.
+- WAITING CODE 'W': If prompted while options are still being dictated or during natural pauses, output 'W' (Waiting). NEVER guess or output '0' while options are in progress.
 
-Accurately listen to and understand the user's English speech.
-Determine the single correct answer and respond immediately by SPEAKING it aloud.
-Rely purely and instantly on your internal parametric knowledge. Do NOT perform web searches, browsing, or multi-step research.
+2. FLEXIBLE OPTIONS DETECTION — LABELED & UNLABELED / NATURAL PAUSES (RATIONALE & DIRECTIVE):
+- RATIONALE: The speaker will NOT always rigidly label options with letters like "Option A", "Option B", "Option C", "Option D". Frequently, the speaker dictates the question, pauses briefly, and then recites the four candidate choices sequentially with natural pauses or intonation shifts (e.g. "What is the capital of France? London... Paris... Rome... Madrid").
+- DIRECTIVE: You must recognize both styles with equal mastery:
+  * Style A (Explicit Labels): If the speaker uses letters or numbers ("A", "B", "C", "D" or "1", "2", "3", "4"), map each option directly.
+  * Style B (Implicit / Unlabeled Sequential Listing): If the speaker lists candidate answers separated by natural pauses, commas, or conversational rhythm without saying letters or numbers:
+    - 1st distinct candidate mentioned = Option 1 (A)
+    - 2nd distinct candidate mentioned = Option 2 (B)
+    - 3rd distinct candidate mentioned = Option 3 (C)
+    - 4th distinct candidate mentioned = Option 4 (D)
+- SEMANTIC INTELLIGENCE: Use your semantic boundary detection to deduce where each candidate answer begins and ends, even if spoken fluidly, fast, or if choices slightly overlap in delivery.
 
-SPEECH OUTPUT RULES - VERY STRICT:
-Say ONLY one single character and nothing else:
-- Say "1" : If the correct answer is Option 1 / First option / (A) / (1).
-- Say "2" : If the correct answer is Option 2 / Second option / (B) / (2).
-- Say "3" : If the correct answer is Option 3 / Third option / (C) / (3).
-- Say "4" : If the correct answer is Option 4 / Fourth option / (D) / (4).
-- Say "T" : If the statement is True.
-- Say "F" : If the statement is False.
-- Say "W" : If the user is still speaking, pausing, or has not yet finished dictating all 4 options (Waiting).
-- Say "0" : ONLY if speech is completely over but entirely unintelligible, inaudible, or pure background noise.
+3. MULTI-TALKER, SIDE-TALK & AMBIENT NOISE FILTERING (RATIONALE & DIRECTIVE):
+- RATIONALE: It is impossible to guarantee that the user is always alone in a soundproof room. Real-world audio contains background chatter, TV noise, family voices, or brief side comments by the speaker.
+- DIRECTIVE: Actively filter out and ignore any side talk, background chatter, or extraneous speech. Skillfully isolate ONLY the core test question and the four candidate answers.
+- IMMEDIATE TRIGGER WHEN COMPLETE: Do NOT wait for dead silence in the room. The moment you have identified the complete question and all four candidate answers, output the single answer character immediately without hesitation.
 
-If the user asks to repeat the previous answer in English (e.g., "repeat", "say again", "repeat the answer", "one more time", "again"), say the code of the last question again.
-NEVER say any words, pleasantries, explanations, or sentences. Only the single character.
+4. STRICT ENGLISH SCRIPT & REPETITION COMMAND:
+- RATIONALE: The user speaks in English. Transcribe speech strictly in standard English Latin script (A-Z). Never transliterate or transcribe into Arabic script.
+- REPEAT: If the user says "repeat", "say again", "repeat the answer", or "one more time", immediately output the code of the previous question.
+
+5. OUTPUT RULES — STRICTLY 1 SINGLE ASCII CHARACTER:
+Output ONLY one single character and nothing else:
+- '1' : If the correct answer is Option 1 / First candidate / (A) / (1).
+- '2' : If the correct answer is Option 2 / Second candidate / (B) / (2).
+- '3' : If the correct answer is Option 3 / Third candidate / (C) / (3).
+- '4' : If the correct answer is Option 4 / Fourth candidate / (D) / (4).
+- 'T' : If the statement is True.
+- 'F' : If the statement is False.
+- 'W' : If the question or options are still in progress / waiting for all 4 options.
+- '0' : ONLY if speech is completely over but entirely unintelligible, inaudible, or pure background noise.
+
+Rules:
+1. NEVER output words, markdown, punctuation, explanations, or quotes. ONLY the single character.
 `;
 
 export class GeminiLiveWebSocketClient {
@@ -234,10 +248,23 @@ export class GeminiLiveWebSocketClient {
   // 💬 User Turn Aggregator (تجميع كلام المستخدم في فقاعة واحدة متصلة ومحدثة لحظياً مثل تطبيق Gemini)
   private currentUserTurnMessageId: string | null = null;
 
+  // 🔄 Soft Reset Engine (تصفير الذاكرة بين الأسئلة تلقائياً دون مقاطعة الهزاز أو المايك)
+  private isSoftResetting: boolean = false;
+  private softResetTimer: ReturnType<typeof setTimeout> | null = null;
+  private cachedApiKey: string = "";
+  private cachedModelName: string = "";
+
   constructor() {
     this.setupNetworkListeners();
     if (typeof window !== "undefined") {
       (window as unknown as { __geminiLiveClient: unknown }).__geminiLiveClient = this;
+    }
+  }
+
+  private clearSoftResetTimer(): void {
+    if (this.softResetTimer) {
+      clearTimeout(this.softResetTimer);
+      this.softResetTimer = null;
     }
   }
 
@@ -488,213 +515,14 @@ export class GeminiLiveWebSocketClient {
       }
       wsTracer.log("SESSION", `API key loaded (length: ${apiKey.length}), model: ${modelName}`);
 
+      this.cachedApiKey = apiKey;
+      this.cachedModelName = modelName;
+
       // 2. WakeLock
       await wakeLockManager.requestWakeLock();
 
-      // 3. Open WebSocket
-      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
-      wsTracer.log("WS", "Opening WebSocket connection...");
-      this.ws = new WebSocket(wsUrl);
-      this.ws.binaryType = "arraybuffer";
-
-      this.ws.onopen = () => {
-        wsTracer.log("WS", "✅ Connected to Gemini Live");
-
-        // Reset stats and reconnect counters
-        this.isSetupComplete = false;
-        this.audioChunksSent = 0;
-        this.messagesReceived = 0;
-        const wasReconnecting = this.isReconnecting;
-        this.isReconnecting = false;
-        this.reconnectAttempts = 0;
-
-        this.updateState({
-          isConnected: true,
-          isConnecting: false,
-          statusMessage: wasReconnecting
-            ? "✅ تمت استعادة الاتصال بنجاح! جاري تهيئة الجلسة..."
-            : "جاري إرسال إعدادات الجلسة... انتظر لحظة",
-        });
-
-        hapticEngine.trigger("START");
-
-        // ═══════════════════════════════════════════════════════════════
-        // ✅ SETUP PAYLOAD — إعدادات محسنة لانتظار الخيارات دون مقاطعة
-        // ═══════════════════════════════════════════════════════════════
-        const setupPayload = {
-          setup: {
-            model: modelName,
-            generationConfig: {
-              responseModalities: ["AUDIO"],
-              temperature: 0.1,
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: {
-                    voiceName: "Aoede",
-                  },
-                },
-              },
-            },
-            realtimeInputConfig: {
-              automaticActivityDetection: {
-                startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
-                endOfSpeechSensitivity: "END_SENSITIVITY_LOW", // حساسية منخفضة لمنع القطع السريع بين الخيارات
-                prefixPaddingMs: 40,
-                silenceDurationMs: 1500, // مهلة صمت 1.5 ثانية تتيح للمتحدث التنفس وذكر الخيارات دون مقاطعة
-              },
-            },
-            inputAudioTranscription: {},
-            outputAudioTranscription: {},
-            systemInstruction: {
-              parts: [{ text: SYSTEM_INSTRUCTION }],
-            },
-          },
-        };
-
-        wsTracer.log("SETUP", "Sending setup payload", setupPayload.setup.model);
-        const sent = this.sendPayload("SETUP", setupPayload);
-
-        if (!sent) {
-          wsTracer.error("SETUP", "Failed to send setup payload");
-          this.updateState({ statusMessage: "فشل إرسال الإعدادات. تحقق من الكونسول." });
-          return;
-        }
-
-        this.addMessage({
-          role: "system",
-          text: wasReconnecting
-            ? "✅ تمت استعادة الاتصال بنجاح وجاري المتابعة..."
-            : "جاري تهيئة الجلسة مع النموذج...",
-        });
-      };
-
-      this.ws.onmessage = async (event) => {
-        this.messagesReceived++;
-        try {
-          let data: any;
-          if (event.data instanceof ArrayBuffer) {
-            const text = new TextDecoder().decode(event.data);
-            data = JSON.parse(text);
-          } else if (event.data instanceof Blob) {
-            const text = await event.data.text();
-            data = JSON.parse(text);
-          } else if (typeof event.data === "string") {
-            data = JSON.parse(event.data);
-          } else {
-            wsTracer.warn("RECV", "Unknown event.data type", typeof event.data);
-            return;
-          }
-          wsTracer.log("RECV", `Message #${this.messagesReceived} received`);
-          this.handleServerMessage(data);
-        } catch (e) {
-          wsTracer.error("PARSE", "Failed to parse server message", e);
-        }
-      };
-
-      this.ws.onerror = (error) => {
-        wsTracer.error("WS", "WebSocket onerror fired", {
-          type: error.type,
-          readyState: this.ws?.readyState,
-        });
-        hapticEngine.trigger("ERROR");
-        this.updateState({ statusMessage: "حدث خطأ في اتصال الويب سوكت — سيتم محاولة الاستعادة تلقائياً" });
-      };
-
-      this.ws.onclose = (event) => {
-        const codeInfo = wsTracer.getCloseCodeInfo(event.code);
-        const reason = event.reason || "(لا يوجد سبب)";
-
-        wsTracer.log("WS", `Connection closed`, {
-          code: event.code,
-          meaning: codeInfo,
-          reason,
-          wasClean: event.wasClean,
-          audioChunksSent: this.audioChunksSent,
-          messagesReceived: this.messagesReceived,
-          lastSentPayloadType: this.lastSentPayloadType,
-          isManualStop: this.isManualStop,
-        });
-
-        // ⚠️ تشخيص خاص بخطأ 1007
-        if (event.code === 1007) {
-          wsTracer.error("DIAG", `=== 1007 DIAGNOSIS ===`);
-          const hints = wsTracer.diagnose1007();
-          hints.forEach((h) => wsTracer.error("DIAG", h));
-          wsTracer.error("DIAG", `Last payload type sent before close: [${this.lastSentPayloadType}]`);
-          wsTracer.error("DIAG", `Audio chunks sent before close: ${this.audioChunksSent}`);
-          wsTracer.dumpLogs();
-        }
-
-        this.stopMicrophoneStream();
-        this.stopPlaybackContext();
-        wakeLockManager.releaseWakeLock();
-
-        const displayReason = event.reason
-          ? `${event.code}: ${event.reason}`
-          : `${event.code} — ${codeInfo}`;
-
-        if (this.isManualStop) {
-          // الإيقاف كان بطلب يدوي من المستخدم
-          this.updateState({
-            isConnected: false,
-            isConnecting: false,
-            isStreamingAudio: false,
-            statusMessage: "تم إيقاف الجلسة. اضغط للبدء من جديد.",
-          });
-          hapticEngine.trigger("STOP");
-          return;
-        }
-
-        // 🔄 محرك إعادة الاتصال التلقائي (Auto-Reconnect & Fallback)
-        if (this.reconnectAttempts < this.maxReconnectAttempts) {
-          this.reconnectAttempts++;
-          this.isReconnecting = true;
-          const delayMs = Math.min(1000 * Math.pow(1.8, this.reconnectAttempts - 1), 10000);
-
-          wsTracer.warn(
-            "RECONNECT",
-            `Abnormal disconnect (${displayReason}). Scheduling auto-reconnect #${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${(delayMs / 1000).toFixed(1)}s`
-          );
-
-          this.updateState({
-            isConnected: false,
-            isConnecting: true,
-            isStreamingAudio: false,
-            statusMessage: `⚠️ انقطع الاتصال (${displayReason}). جاري إعادة الاتصال تلقائياً (${this.reconnectAttempts}/${this.maxReconnectAttempts}) بعد ${(delayMs / 1000).toFixed(1)} ثانية...`,
-          });
-
-          hapticEngine.trigger("PROCESSING");
-
-          this.addMessage({
-            role: "system",
-            text: `⚠️ انقطع الاتصال (${displayReason}). جاري إعادة الاتصال تلقائياً (محاولة ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`,
-          });
-
-          this.clearReconnectTimer();
-          this.reconnectTimer = setTimeout(async () => {
-            await this.startSession(true);
-          }, delayMs);
-        } else {
-          // استنفاد جميع محاولات إعادة الاتصال
-          this.isReconnecting = false;
-          wsTracer.error("RECONNECT", `Failed to restore connection after ${this.maxReconnectAttempts} attempts`);
-
-          this.updateState({
-            isConnected: false,
-            isConnecting: false,
-            isStreamingAudio: false,
-            statusMessage: `❌ تعذر استعادة الاتصال تلقائياً بعد ${this.maxReconnectAttempts} محاولات (${displayReason}). اضغط للبدء من جديد.`,
-          });
-
-          this.addMessage({
-            role: "system",
-            text: `تعذر استعادة الاتصال بعد ${this.maxReconnectAttempts} محاولات. يرجى التحقق من الشبكة ثم الضغط لبدء الاتصال.`,
-          });
-
-          hapticEngine.trigger("ERROR");
-        }
-      };
-
+      // 3. Connect WebSocket
+      this.connectWebSocket(apiKey, modelName, false);
       return true;
     } catch (err: unknown) {
       wsTracer.error("SESSION", "Failed to start session", err);
@@ -708,10 +536,283 @@ export class GeminiLiveWebSocketClient {
     }
   }
 
+  /**
+   * 🔌 Establish WebSocket Connection (Used for initial session, auto-reconnect, and seamless soft-reset)
+   */
+  private connectWebSocket(apiKey: string, modelName: string, isSoftReset: boolean) {
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    wsTracer.log("WS", isSoftReset ? "🔄 Opening fresh WebSocket connection for next question (Soft Reset)..." : "Opening WebSocket connection...");
+    
+    this.ws = new WebSocket(wsUrl);
+    this.ws.binaryType = "arraybuffer";
+
+    this.ws.onopen = () => {
+      wsTracer.log("WS", isSoftReset ? "✅ Connected for next question (fresh 0-token memory)" : "✅ Connected to Gemini Live");
+
+      this.isSetupComplete = false;
+      this.audioChunksSent = 0;
+      this.messagesReceived = 0;
+      const wasReconnecting = this.isReconnecting;
+      this.isReconnecting = false;
+      this.reconnectAttempts = 0;
+      this.isSoftResetting = false;
+
+      this.updateState({
+        isConnected: true,
+        isConnecting: false,
+        statusMessage: isSoftReset
+          ? "جاهز للسؤال التالي (ذاكرة نقية)... تكلم الآن"
+          : wasReconnecting
+          ? "✅ تمت استعادة الاتصال بنجاح! جاري تهيئة الجلسة..."
+          : "جاري إرسال إعدادات الجلسة... انتظر لحظة",
+      });
+
+      if (!isSoftReset) {
+        hapticEngine.trigger("START");
+      }
+
+      // ═══════════════════════════════════════════════════════════════
+      // ✅ SETUP PAYLOAD
+      // ═══════════════════════════════════════════════════════════════
+      const setupPayload = {
+        setup: {
+          model: modelName,
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            temperature: 0.1,
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: "Aoede",
+                },
+              },
+            },
+          },
+          realtimeInputConfig: {
+            automaticActivityDetection: {
+              startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
+              endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
+              prefixPaddingMs: 40,
+              silenceDurationMs: 1500,
+            },
+          },
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+          systemInstruction: {
+            parts: [{ text: SYSTEM_INSTRUCTION }],
+          },
+        },
+      };
+
+      wsTracer.log("SETUP", "Sending setup payload", setupPayload.setup.model);
+      const sent = this.sendPayload("SETUP", setupPayload);
+
+      if (!sent) {
+        wsTracer.error("SETUP", "Failed to send setup payload");
+        this.updateState({ statusMessage: "فشل إرسال الإعدادات. تحقق من الكونسول." });
+        return;
+      }
+
+      if (!isSoftReset) {
+        this.addMessage({
+          role: "system",
+          text: wasReconnecting
+            ? "✅ تمت استعادة الاتصال بنجاح وجاري المتابعة..."
+            : "جاري تهيئة الجلسة مع النموذج...",
+        });
+      }
+    };
+
+    this.ws.onmessage = async (event) => {
+      this.messagesReceived++;
+      try {
+        let data: any;
+        if (event.data instanceof ArrayBuffer) {
+          const text = new TextDecoder().decode(event.data);
+          data = JSON.parse(text);
+        } else if (event.data instanceof Blob) {
+          const text = await event.data.text();
+          data = JSON.parse(text);
+        } else if (typeof event.data === "string") {
+          data = JSON.parse(event.data);
+        } else {
+          wsTracer.warn("RECV", "Unknown event.data type", typeof event.data);
+          return;
+        }
+        wsTracer.log("RECV", `Message #${this.messagesReceived} received`);
+        this.handleServerMessage(data);
+      } catch (e) {
+        wsTracer.error("PARSE", "Failed to parse server message", e);
+      }
+    };
+
+    this.ws.onerror = (error) => {
+      wsTracer.error("WS", "WebSocket onerror fired", {
+        type: error.type,
+        readyState: this.ws?.readyState,
+      });
+      if (!this.isSoftResetting) {
+        hapticEngine.trigger("ERROR");
+        this.updateState({ statusMessage: "حدث خطأ في اتصال الويب سوكت — سيتم محاولة الاستعادة تلقائياً" });
+      }
+    };
+
+    this.ws.onclose = (event) => {
+      // 🛡️ Soft Reset Guard: If this close was intentional for resetting context, DO NOT stop mic or haptic motor!
+      if (this.isSoftResetting) {
+        wsTracer.log("WS", "Soft reset close acknowledged — preserving microphone stream, worklet, and haptic motor.");
+        return;
+      }
+
+      const codeInfo = wsTracer.getCloseCodeInfo(event.code);
+      const reason = event.reason || "(لا يوجد سبب)";
+
+      wsTracer.log("WS", `Connection closed`, {
+        code: event.code,
+        meaning: codeInfo,
+        reason,
+        wasClean: event.wasClean,
+        audioChunksSent: this.audioChunksSent,
+        messagesReceived: this.messagesReceived,
+        lastSentPayloadType: this.lastSentPayloadType,
+        isManualStop: this.isManualStop,
+      });
+
+      if (event.code === 1007) {
+        wsTracer.error("DIAG", `=== 1007 DIAGNOSIS ===`);
+        const hints = wsTracer.diagnose1007();
+        hints.forEach((h) => wsTracer.error("DIAG", h));
+        wsTracer.error("DIAG", `Last payload type sent before close: [${this.lastSentPayloadType}]`);
+        wsTracer.error("DIAG", `Audio chunks sent before close: ${this.audioChunksSent}`);
+        wsTracer.dumpLogs();
+      }
+
+      this.stopMicrophoneStream();
+      this.stopPlaybackContext();
+      wakeLockManager.releaseWakeLock();
+
+      const displayReason = event.reason
+        ? `${event.code}: ${event.reason}`
+        : `${event.code} — ${codeInfo}`;
+
+      if (this.isManualStop) {
+        this.updateState({
+          isConnected: false,
+          isConnecting: false,
+          isStreamingAudio: false,
+          statusMessage: "تم إيقاف الجلسة. اضغط للبدء من جديد.",
+        });
+        hapticEngine.trigger("STOP");
+        return;
+      }
+
+      // 🔄 محرك إعادة الاتصال التلقائي (Auto-Reconnect & Fallback)
+      if (this.reconnectAttempts < this.maxReconnectAttempts) {
+        this.reconnectAttempts++;
+        this.isReconnecting = true;
+        const delayMs = Math.min(1000 * Math.pow(1.8, this.reconnectAttempts - 1), 10000);
+
+        wsTracer.warn(
+          "RECONNECT",
+          `Abnormal disconnect (${displayReason}). Scheduling auto-reconnect #${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${(delayMs / 1000).toFixed(1)}s`
+        );
+
+        this.updateState({
+          isConnected: false,
+          isConnecting: true,
+          isStreamingAudio: false,
+          statusMessage: `⚠️ انقطع الاتصال (${displayReason}). جاري إعادة الاتصال تلقائياً (${this.reconnectAttempts}/${this.maxReconnectAttempts}) بعد ${(delayMs / 1000).toFixed(1)} ثانية...`,
+        });
+
+        hapticEngine.trigger("PROCESSING");
+
+        this.addMessage({
+          role: "system",
+          text: `⚠️ انقطع الاتصال (${displayReason}). جاري إعادة الاتصال تلقائياً (محاولة ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`,
+        });
+
+        this.clearReconnectTimer();
+        this.reconnectTimer = setTimeout(async () => {
+          await this.startSession(true);
+        }, delayMs);
+      } else {
+        this.isReconnecting = false;
+        wsTracer.error("RECONNECT", `Failed to restore connection after ${this.maxReconnectAttempts} attempts`);
+
+        this.updateState({
+          isConnected: false,
+          isConnecting: false,
+          isStreamingAudio: false,
+          statusMessage: `❌ تعذر استعادة الاتصال تلقائياً بعد ${this.maxReconnectAttempts} محاولات (${displayReason}). اضغط للبدء من جديد.`,
+        });
+
+        this.addMessage({
+          role: "system",
+          text: `تعذر استعادة الاتصال بعد ${this.maxReconnectAttempts} محاولات. يرجى التحقق من الشبكة ثم الضغط لبدء الاتصال.`,
+        });
+
+        hapticEngine.trigger("ERROR");
+      }
+    };
+  }
+
+  /**
+   * 🔄 Soft Reset for Next Question:
+   * Keeps microphone stream running, allows hardware haptics to finish completely,
+   * and starts a 100% clean context session with Gemini Live for the next question.
+   */
+  public softResetSessionForNextTurn(): void {
+    if (!this.state.isConnected || this.isManualStop) return;
+
+    wsTracer.log("SESSION", "🔄 Initiating seamless soft reset for next question (clean memory)...");
+    this.isSoftResetting = true;
+    this.isSetupComplete = false;
+    this.currentUserTurnMessageId = null;
+
+    // Release model speaking ducking so mic is completely active
+    this._setModelSpeaking(false);
+
+    // 1. Close current WebSocket cleanly
+    if (this.ws) {
+      try {
+        this.ws.close(1000, "Soft reset for next question");
+      } catch (e) {
+        wsTracer.warn("SESSION", "WS close notice during soft reset", e);
+      }
+      this.ws = null;
+    }
+
+    this.updateState({
+      statusMessage: "جاري تجهيز الذاكرة للسؤال التالي...",
+    });
+
+    const apiKey = this.cachedApiKey;
+    const modelName = this.cachedModelName || "models/gemini-2.5-flash-native-audio-latest";
+
+    if (!apiKey) {
+      this.isSoftResetting = false;
+      this.startSession(false);
+      return;
+    }
+
+    // 2. Open fresh WebSocket for the next question
+    this.connectWebSocket(apiKey, modelName, true);
+  }
+
+  /** جدولة إعادة الضبط السلسة بعد الإجابة */
+  private scheduleSoftReset(delayMs: number = 700) {
+    this.clearSoftResetTimer();
+    this.softResetTimer = setTimeout(() => {
+      this.softResetSessionForNextTurn();
+    }, delayMs);
+  }
+
   /** Stop the session */
   public stopSession(): void {
     wsTracer.log("SESSION", "Stopping session manually by user");
     this.isManualStop = true;
+    this.isSoftResetting = false;
+    this.clearSoftResetTimer();
     this.isReconnecting = false;
     this.reconnectAttempts = 0;
     this.clearReconnectTimer();
@@ -749,13 +850,21 @@ export class GeminiLiveWebSocketClient {
         wsTracer.log("PROTO", "✅ setupComplete received", response.setupComplete);
         this.isSetupComplete = true;
         this.currentUserTurnMessageId = null;
+
+        const isSoftResetSetup = this.state.isStreamingAudio; // mic already running = soft reset
+
         this.updateState({
-          statusMessage: "متصل لحظياً. تكلم بالسؤال والخيارات بالإنجليزية...",
+          statusMessage: isSoftResetSetup
+            ? "جاهز للسؤال التالي (ذاكرة نقية)... تكلم الآن"
+            : "متصل لحظياً. تكلم بالسؤال والخيارات بالإنجليزية...",
         });
-        this.addMessage({
-          role: "system",
-          text: "تم فتح الاتصال الحي عبر الويب سوكت. المايك يستمع باستمرار...",
-        });
+
+        if (!isSoftResetSetup) {
+          this.addMessage({
+            role: "system",
+            text: "تم فتح الاتصال الحي عبر الويب سوكت. المايك يستمع باستمرار...",
+          });
+        }
 
         // 🔒 LANGUAGE ANCHOR CONTEXT SEEDING (تثبيت لغة الاستماع على الإنجليزية حصراً لمنع الكتابة بالعربي)
         const languageAnchorPayload = {
@@ -784,7 +893,10 @@ export class GeminiLiveWebSocketClient {
         wsTracer.log("SETUP", "Sending English Language Anchor turn to lock STT into English");
         this.sendPayload("LANG_ANCHOR", languageAnchorPayload);
 
-        this.startMicrophoneStream();
+        // Only start mic if this is NOT a soft reset (mic is already streaming during soft reset)
+        if (!isSoftResetSetup) {
+          this.startMicrophoneStream();
+        }
         return;
       }
 
@@ -865,6 +977,10 @@ export class GeminiLiveWebSocketClient {
               text: `الإجابة: [${detectedCode}]`,
               code: detectedCode,
             });
+
+            // 🔄 Schedule soft reset after answer — 700ms delay lets haptic vibrations finish completely
+            wsTracer.log("SESSION", `Scheduling soft reset in 700ms after answer [${detectedCode}]`);
+            this.scheduleSoftReset(700);
           }
         }
       }
@@ -879,6 +995,11 @@ export class GeminiLiveWebSocketClient {
           this.updateState({
             statusMessage: "جاهز للسؤال التالي. تكلم الآن...",
           });
+          // Ensure soft reset is scheduled if it hasn't been already
+          if (!this.softResetTimer && !this.isSoftResetting) {
+            wsTracer.log("SESSION", "Turn complete with real answer — scheduling soft reset fallback");
+            this.scheduleSoftReset(500);
+          }
         }
       }
 
