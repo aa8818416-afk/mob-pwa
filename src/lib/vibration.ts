@@ -2,7 +2,7 @@
  * Haptic Vibration Engine for Deaf-Blind Tactile Communication
  */
 
-export type AnswerCode = '1' | '2' | '3' | '4' | 'T' | 'F' | '0' | 'START' | 'STOP' | 'PROCESSING' | 'ERROR';
+export type AnswerCode = '1' | '2' | '3' | '4' | 'T' | 'F' | '0' | 'W' | 'START' | 'STOP' | 'PROCESSING' | 'ERROR';
 
 export interface VibrationPatternConfig {
   pattern: number[];
@@ -47,6 +47,12 @@ export const VIBRATION_PATTERNS: Record<AnswerCode, VibrationPatternConfig> = {
     label: 'False / No',
     labelAr: 'خـطـأ (False)',
     descriptionAr: 'هزتان طويلتان',
+  },
+  'W': {
+    pattern: [50, 100, 50],
+    label: 'Waiting for Options',
+    labelAr: 'بانتظار إكمال السؤال والخيارات',
+    descriptionAr: 'نبضتان خفيفتان تفيدان بأن النموذج يستمع وبانتظار باقي الخيارات',
   },
   '0': {
     pattern: [80, 70, 80, 70, 80, 70, 80, 70, 80],

@@ -20,11 +20,20 @@ export interface LiveSessionState {
 }
 
 // ═══════════════════════════════════════════
-// 🔍 ERROR TRACER — نظام تتبع الأخطاء
+// 🔍 ERROR TRACER — نظام تتبع الأخطاء الدقيق
 // ═══════════════════════════════════════════
+export interface WsDiagnosticError {
+  timestamp: string;
+  tag: string;
+  message: string;
+  data?: unknown;
+}
+
 class WsErrorTracer {
   private logs: string[] = [];
-  private maxLogs = 200;
+  private maxLogs = 300;
+  private recentErrors: WsDiagnosticError[] = [];
+  private maxRecentErrors = 25;
 
   log(tag: string, message: string, data?: unknown) {
     const ts = new Date().toISOString().split("T")[1].slice(0, 12);
@@ -43,6 +52,10 @@ class WsErrorTracer {
       : `[${ts}] ❌ [${tag}] ${message}`;
     this.logs.push(entry);
     if (this.logs.length > this.maxLogs) this.logs.shift();
+    
+    this.recentErrors.push({ timestamp: ts, tag, message, data });
+    if (this.recentErrors.length > this.maxRecentErrors) this.recentErrors.shift();
+
     console.error(entry);
   }
 
@@ -63,7 +76,7 @@ class WsErrorTracer {
       1002: "Protocol Error — خطأ في البروتوكول",
       1003: "Unsupported Data — نوع البيانات غير مدعوم (binary vs text)",
       1005: "No Status Code — لا يوجد كود إغلاق",
-      1006: "Abnormal Closure — انقطع الاتصال بشكل مفاجئ بلا رسالة إغلاق",
+      1006: "Abnormal Closure — انقطع الاتصال بشكل مفاجئ بلا رسالة إغلاق (شبكة/سيرفر)",
       1007: "Invalid Frame Payload — البيانات المرسلة غير صالحة (JSON مشوّه أو schema خاطئ)",
       1008: "Policy Violation — انتهاك السياسة (مثلاً: API key منتهية أو غير مصرح)",
       1009: "Message Too Big — الرسالة أكبر من الحد المسموح",
@@ -88,10 +101,24 @@ class WsErrorTracer {
     ];
   }
 
+  getRecentErrors(): WsDiagnosticError[] {
+    return [...this.recentErrors];
+  }
+
+  getDiagnosticReport(): string {
+    const header = "════════════════════════════════════════\n🔍 GEMINI LIVE DIAGNOSTIC REPORT\n════════════════════════════════════════";
+    const errorsSection = this.recentErrors.length === 0
+      ? "✅ No errors recorded in this session."
+      : this.recentErrors.map((e, idx) => `[#${idx + 1}] [${e.timestamp}] [${e.tag}] ${e.message} ${e.data ? `→ ${JSON.stringify(e.data)}` : ""}`).join("\n");
+    const tailSection = this.logs.slice(-15).join("\n");
+    return `${header}\n\n⚠️ RECENT ERRORS (${this.recentErrors.length}):\n${errorsSection}\n\n📋 LAST 15 LOGS:\n${tailSection}\n════════════════════════════════════════`;
+  }
+
   dumpLogs(): void {
     console.group("📋 WS Error Tracer — Full Log Dump");
     this.logs.forEach((l) => console.log(l));
     console.groupEnd();
+    console.log(this.getDiagnosticReport());
   }
 
   getLogs(): string[] {
@@ -100,10 +127,15 @@ class WsErrorTracer {
 
   clear() {
     this.logs = [];
+    this.recentErrors = [];
   }
 }
 
 export const wsTracer = new WsErrorTracer();
+
+if (typeof window !== "undefined") {
+  (window as unknown as { __wsTracer: WsErrorTracer }).__wsTracer = wsTracer;
+}
 
 // ═══════════════════════════════════════════
 // 📡 PAYLOAD VALIDATOR — التحقق قبل الإرسال
@@ -111,7 +143,6 @@ export const wsTracer = new WsErrorTracer();
 function safeStringify(payload: unknown): string | null {
   try {
     const str = JSON.stringify(payload);
-    // تحقق من أن JSON صالح بالكامل
     JSON.parse(str);
     return str;
   } catch (e) {
@@ -124,7 +155,19 @@ function safeStringify(payload: unknown): string | null {
 const SYSTEM_INSTRUCTION = `
 You are an ultra-fast tactical AI assistant designed specifically for a deaf-blind user communicating via haptic vibrations.
 The user speaks in English. All spoken input, questions, options, and commands are in English.
-The user will speak a multiple-choice question, true/false question, or ask to repeat/clarify.
+The user speaks a multiple-choice question (with four options: A, B, C, D / 1, 2, 3, 4) or a True/False question, or commands to repeat/clarify.
+
+CRITICAL PATIENCE & COMPLETION DIRECTIVES:
+1. NEVER guess or answer prematurely while the user is still speaking or pausing.
+2. You MUST wait patiently until the user has fully stated BOTH the entire question stem AND ALL FOUR OPTIONS (Option 1/A, Option 2/B, Option 3/C, and Option 4/D) or the complete statement for True/False.
+3. Natural pauses between the question stem and the options, or between individual options, are NOT the end of the question. You MUST wait patiently for all four options.
+4. If the question or options are still incomplete, or if you are triggered while the user is still dictating options, DO NOT guess, DO NOT answer prematurely, and DO NOT output "0". You MUST say "W" (Waiting) or remain completely silent.
+5. Say "0" ONLY and STRICTLY if the user has completely finished speaking their entire turn and the audio was genuinely unintelligible noise or corrupted static. Never output "0" for incomplete questions or during pauses.
+
+CRITICAL MULTI-TALKER, SIDE-TALK & NOISE RESILIENCE:
+1. EXTRANEOUS SPEECH & SIDE TALK FILTERING: The user may be in an environment with background chatter, overheard voices, television sounds, or may utter brief side remarks. Actively filter out and discard any side chatter or irrelevant background speech. Skillfully isolate ONLY the core test question and the four options (1/A, 2/B, 3/C, 4/D) or True/False statement.
+2. IMMEDIATE TRIGGER WHEN COMPLETE: Do NOT wait for absolute room silence. As soon as you have identified the complete question and all four options (or True/False statement), output the single answer character immediately, even if ambient sound or speech is still present in the microphone.
+3. STRICT ENGLISH SCRIPT: The user speaks exclusively in English. Process and transcribe speech strictly in standard English Latin letters (A-Z). Under no circumstances transcribe or transliterate the English speech into Arabic script or base answers on unrelated ambient Arabic talk.
 
 Accurately listen to and understand the user's English speech.
 Determine the single correct answer and respond immediately by SPEAKING it aloud.
@@ -138,7 +181,8 @@ Say ONLY one single character and nothing else:
 - Say "4" : If the correct answer is Option 4 / Fourth option / (D) / (4).
 - Say "T" : If the statement is True.
 - Say "F" : If the statement is False.
-- Say "0" : If the audio was unclear, inaudible, noisy, or incomplete.
+- Say "W" : If the user is still speaking, pausing, or has not yet finished dictating all 4 options (Waiting).
+- Say "0" : ONLY if speech is completely over but entirely unintelligible, inaudible, or pure background noise.
 
 If the user asks to repeat the previous answer in English (e.g., "repeat", "say again", "repeat the answer", "one more time", "again"), say the code of the last question again.
 NEVER say any words, pleasantries, explanations, or sentences. Only the single character.
@@ -180,6 +224,52 @@ export class GeminiLiveWebSocketClient {
     messages: [],
   };
 
+  // 🔄 Auto-Reconnect Engine
+  private isManualStop: boolean = false;
+  private reconnectAttempts: number = 0;
+  private readonly maxReconnectAttempts: number = 5;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private isReconnecting: boolean = false;
+
+  // 💬 User Turn Aggregator (تجميع كلام المستخدم في فقاعة واحدة متصلة ومحدثة لحظياً مثل تطبيق Gemini)
+  private currentUserTurnMessageId: string | null = null;
+
+  constructor() {
+    this.setupNetworkListeners();
+    if (typeof window !== "undefined") {
+      (window as unknown as { __geminiLiveClient: unknown }).__geminiLiveClient = this;
+    }
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private setupNetworkListeners(): void {
+    if (typeof window === "undefined") return;
+
+    window.addEventListener("online", () => {
+      wsTracer.log("NETWORK", "🌐 Device came ONLINE (Internet restored)");
+      if (!this.state.isConnected && !this.isManualStop) {
+        wsTracer.log("NETWORK", "Triggering immediate reconnect after network restoration...");
+        this.clearReconnectTimer();
+        this.startSession(true);
+      }
+    });
+
+    window.addEventListener("offline", () => {
+      wsTracer.warn("NETWORK", "⚠️ Device went OFFLINE — waiting for network reconnection...");
+      if (this.state.isConnected) {
+        this.updateState({
+          statusMessage: "⚠️ انقطع اتصال الإنترنت بالجهاز. بانتظار عودة الشبكة...",
+        });
+      }
+    });
+  }
+
   public onStateChange(cb: (state: LiveSessionState) => void) {
     this.stateChangeCallback = cb;
     cb(this.state);
@@ -201,6 +291,11 @@ export class GeminiLiveWebSocketClient {
     wsTracer.dumpLogs();
   }
 
+  /** الحصول على تقرير تشخيصي فوري */
+  public getDiagnosticReport(): string {
+    return wsTracer.getDiagnosticReport();
+  }
+
   /** الحصول على اللوقات للعرض */
   public getDebugLogs(): string[] {
     return wsTracer.getLogs();
@@ -219,6 +314,110 @@ export class GeminiLiveWebSocketClient {
     this.updateState({
       messages: [...this.state.messages, newMsg],
     });
+  }
+
+  /** معالجة وتصحيح النص الصوتي وتحويل الكلمات المعربة إلى إنجليزية إن وُجدت */
+  private sanitizeAndNormalizeTranscript(text: string): string {
+    let clean = text.trim();
+    if (!clean) return "";
+
+    // استبدال الكلمات الإنجليزية الشائعة التي قد يكتبها محرك الصوت خطأً بحروف عربية
+    const arabicToEnglishMap: [RegExp, string][] = [
+      [/\b(وات|واط)\b/gi, "What"],
+      [/\b(از|إز)\b/gi, "is"],
+      [/\bذا\b/gi, "the"],
+      [/\b(أوبشن|اوبشن)\b/gi, "Option"],
+      [/\b(وان|ون)\b/gi, "1"],
+      [/\bتو\b/gi, "2"],
+      [/\b(ثري|تري)\b/gi, "3"],
+      [/\bفور\b/gi, "4"],
+      [/\b(ترو|تيرو)\b/gi, "True"],
+      [/\bفولس\b/gi, "False"],
+      [/\b(ايه|إيه|أيه)\b/gi, "A"],
+      [/\bبي\b/gi, "B"],
+      [/\bسي\b/gi, "C"],
+      [/\bدي\b/gi, "D"],
+      [/\b(كويستشن|كويستشنز)\b/gi, "Question"],
+      [/\b(ريبيت|ربيت)\b/gi, "Repeat"],
+    ];
+
+    for (const [pattern, replacement] of arabicToEnglishMap) {
+      clean = clean.replace(pattern, replacement);
+    }
+
+    return clean;
+  }
+
+  /** تجميع مجزآت كلام المستخدم في رسالة واحدة متصلة لحظياً مثل تطبيق Gemini */
+  private updateOrAppendUserMessage(rawChunk: string) {
+    const chunk = this.sanitizeAndNormalizeTranscript(rawChunk);
+    if (!chunk) return;
+
+    const messages = [...this.state.messages];
+    const existingIndex = this.currentUserTurnMessageId
+      ? messages.findIndex((m) => m.id === this.currentUserTurnMessageId)
+      : -1;
+
+    if (existingIndex !== -1) {
+      const currentMsg = messages[existingIndex];
+      const prevText = currentMsg.text.trim();
+
+      let newText = prevText;
+      // إذا كان المقطع الجديد يحتوي النص السابق كاملاً (تحديث تراكمي من السيرفر)
+      if (chunk.startsWith(prevText)) {
+        newText = chunk;
+      } else if (prevText.endsWith(chunk)) {
+        newText = prevText;
+      } else {
+        // فحص تداخل الكلمات لمنع تكرار أي كلمة عند الدمج
+        const prevWords = prevText.split(/\s+/);
+        const chunkWords = chunk.split(/\s+/);
+
+        let overlapCount = 0;
+        const maxCheck = Math.min(prevWords.length, chunkWords.length, 5);
+        for (let len = maxCheck; len >= 1; len--) {
+          const prevSlice = prevWords.slice(-len).join(" ").toLowerCase();
+          const chunkSlice = chunkWords.slice(0, len).join(" ").toLowerCase();
+          if (prevSlice === chunkSlice) {
+            overlapCount = len;
+            break;
+          }
+        }
+
+        if (overlapCount > 0) {
+          const remainingChunk = chunkWords.slice(overlapCount).join(" ");
+          newText = remainingChunk ? `${prevText} ${remainingChunk}` : prevText;
+        } else {
+          newText = `${prevText} ${chunk}`;
+        }
+      }
+
+      messages[existingIndex] = {
+        ...currentMsg,
+        text: newText,
+      };
+
+      this.updateState({ messages });
+    } else {
+      // فتح فقاعة رسالة مستخدم جديدة لهذه الجولة
+      const newId = Math.random().toString(36).substring(2, 9);
+      this.currentUserTurnMessageId = newId;
+
+      const newMsg: ChatMessage = {
+        id: newId,
+        role: "user",
+        text: chunk,
+        timestamp: new Date().toLocaleTimeString("ar-EG", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+      };
+
+      this.updateState({
+        messages: [...messages, newMsg],
+      });
+    }
   }
 
   /** إرسال payload مع تسجيل كامل */
@@ -247,15 +446,27 @@ export class GeminiLiveWebSocketClient {
   }
 
   /** Start Live WebSocket Session */
-  public async startSession(): Promise<boolean> {
-    if (this.state.isConnected || this.state.isConnecting) return true;
+  public async startSession(isAutoRetry: boolean = false): Promise<boolean> {
+    if (this.state.isConnected) return true;
+    if (this.state.isConnecting && !isAutoRetry) return true;
 
-    wsTracer.clear();
-    wsTracer.log("SESSION", "Starting new session...");
+    this.clearReconnectTimer();
+
+    if (!isAutoRetry) {
+      this.isManualStop = false;
+      this.reconnectAttempts = 0;
+      this.isReconnecting = false;
+      wsTracer.clear();
+      wsTracer.log("SESSION", "Starting new user-initiated session...");
+    } else {
+      wsTracer.log("RECONNECT", `Executing auto-reconnect attempt #${this.reconnectAttempts}/${this.maxReconnectAttempts}...`);
+    }
 
     this.updateState({
       isConnecting: true,
-      statusMessage: "جاري فتح اتصال الويب سوكت مع النموذج...",
+      statusMessage: isAutoRetry
+        ? `جاري استعادة الاتصال تلقائياً (محاولة ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`
+        : "جاري فتح اتصال الويب سوكت مع النموذج...",
     });
 
     try {
@@ -289,21 +500,26 @@ export class GeminiLiveWebSocketClient {
       this.ws.onopen = () => {
         wsTracer.log("WS", "✅ Connected to Gemini Live");
 
-        // Reset stats
+        // Reset stats and reconnect counters
         this.isSetupComplete = false;
         this.audioChunksSent = 0;
         this.messagesReceived = 0;
+        const wasReconnecting = this.isReconnecting;
+        this.isReconnecting = false;
+        this.reconnectAttempts = 0;
 
         this.updateState({
           isConnected: true,
           isConnecting: false,
-          statusMessage: "جاري إرسال إعدادات الجلسة... انتظر لحظة",
+          statusMessage: wasReconnecting
+            ? "✅ تمت استعادة الاتصال بنجاح! جاري تهيئة الجلسة..."
+            : "جاري إرسال إعدادات الجلسة... انتظر لحظة",
         });
 
         hapticEngine.trigger("START");
 
         // ═══════════════════════════════════════════════════════════════
-        // ✅ SETUP PAYLOAD
+        // ✅ SETUP PAYLOAD — إعدادات محسنة لانتظار الخيارات دون مقاطعة
         // ═══════════════════════════════════════════════════════════════
         const setupPayload = {
           setup: {
@@ -322,9 +538,9 @@ export class GeminiLiveWebSocketClient {
             realtimeInputConfig: {
               automaticActivityDetection: {
                 startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
-                endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
-                prefixPaddingMs: 30,
-                silenceDurationMs: 400,
+                endOfSpeechSensitivity: "END_SENSITIVITY_LOW", // حساسية منخفضة لمنع القطع السريع بين الخيارات
+                prefixPaddingMs: 40,
+                silenceDurationMs: 1500, // مهلة صمت 1.5 ثانية تتيح للمتحدث التنفس وذكر الخيارات دون مقاطعة
               },
             },
             inputAudioTranscription: {},
@@ -346,7 +562,9 @@ export class GeminiLiveWebSocketClient {
 
         this.addMessage({
           role: "system",
-          text: "جاري تهيئة الجلسة مع النموذج...",
+          text: wasReconnecting
+            ? "✅ تمت استعادة الاتصال بنجاح وجاري المتابعة..."
+            : "جاري تهيئة الجلسة مع النموذج...",
         });
       };
 
@@ -376,10 +594,10 @@ export class GeminiLiveWebSocketClient {
       this.ws.onerror = (error) => {
         wsTracer.error("WS", "WebSocket onerror fired", {
           type: error.type,
-          // event.error is usually null in browser WS errors
+          readyState: this.ws?.readyState,
         });
         hapticEngine.trigger("ERROR");
-        this.updateState({ statusMessage: "حدث خطأ في اتصال الويب سوكت — راجع الكونسول" });
+        this.updateState({ statusMessage: "حدث خطأ في اتصال الويب سوكت — سيتم محاولة الاستعادة تلقائياً" });
       };
 
       this.ws.onclose = (event) => {
@@ -394,6 +612,7 @@ export class GeminiLiveWebSocketClient {
           audioChunksSent: this.audioChunksSent,
           messagesReceived: this.messagesReceived,
           lastSentPayloadType: this.lastSentPayloadType,
+          isManualStop: this.isManualStop,
         });
 
         // ⚠️ تشخيص خاص بخطأ 1007
@@ -403,8 +622,6 @@ export class GeminiLiveWebSocketClient {
           hints.forEach((h) => wsTracer.error("DIAG", h));
           wsTracer.error("DIAG", `Last payload type sent before close: [${this.lastSentPayloadType}]`);
           wsTracer.error("DIAG", `Audio chunks sent before close: ${this.audioChunksSent}`);
-
-          // طباعة كل اللوقات للمساعدة في التشخيص
           wsTracer.dumpLogs();
         }
 
@@ -412,20 +629,70 @@ export class GeminiLiveWebSocketClient {
         this.stopPlaybackContext();
         wakeLockManager.releaseWakeLock();
 
-        // عرض سبب الإغلاق من السيرفر إن وُجد (مفيد جداً لتشخيص 1007)
         const displayReason = event.reason
           ? `${event.code}: ${event.reason}`
           : `${event.code} — ${codeInfo}`;
 
-        this.updateState({
-          isConnected: false,
-          isConnecting: false,
-          isStreamingAudio: false,
-          statusMessage: `⚠️ إغلاق الاتصال (${displayReason}). اضغط للبدء من جديد.`,
-        });
+        if (this.isManualStop) {
+          // الإيقاف كان بطلب يدوي من المستخدم
+          this.updateState({
+            isConnected: false,
+            isConnecting: false,
+            isStreamingAudio: false,
+            statusMessage: "تم إيقاف الجلسة. اضغط للبدء من جديد.",
+          });
+          hapticEngine.trigger("STOP");
+          return;
+        }
 
+        // 🔄 محرك إعادة الاتصال التلقائي (Auto-Reconnect & Fallback)
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.reconnectAttempts++;
+          this.isReconnecting = true;
+          const delayMs = Math.min(1000 * Math.pow(1.8, this.reconnectAttempts - 1), 10000);
 
-        hapticEngine.trigger("STOP");
+          wsTracer.warn(
+            "RECONNECT",
+            `Abnormal disconnect (${displayReason}). Scheduling auto-reconnect #${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${(delayMs / 1000).toFixed(1)}s`
+          );
+
+          this.updateState({
+            isConnected: false,
+            isConnecting: true,
+            isStreamingAudio: false,
+            statusMessage: `⚠️ انقطع الاتصال (${displayReason}). جاري إعادة الاتصال تلقائياً (${this.reconnectAttempts}/${this.maxReconnectAttempts}) بعد ${(delayMs / 1000).toFixed(1)} ثانية...`,
+          });
+
+          hapticEngine.trigger("PROCESSING");
+
+          this.addMessage({
+            role: "system",
+            text: `⚠️ انقطع الاتصال (${displayReason}). جاري إعادة الاتصال تلقائياً (محاولة ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`,
+          });
+
+          this.clearReconnectTimer();
+          this.reconnectTimer = setTimeout(async () => {
+            await this.startSession(true);
+          }, delayMs);
+        } else {
+          // استنفاد جميع محاولات إعادة الاتصال
+          this.isReconnecting = false;
+          wsTracer.error("RECONNECT", `Failed to restore connection after ${this.maxReconnectAttempts} attempts`);
+
+          this.updateState({
+            isConnected: false,
+            isConnecting: false,
+            isStreamingAudio: false,
+            statusMessage: `❌ تعذر استعادة الاتصال تلقائياً بعد ${this.maxReconnectAttempts} محاولات (${displayReason}). اضغط للبدء من جديد.`,
+          });
+
+          this.addMessage({
+            role: "system",
+            text: `تعذر استعادة الاتصال بعد ${this.maxReconnectAttempts} محاولات. يرجى التحقق من الشبكة ثم الضغط لبدء الاتصال.`,
+          });
+
+          hapticEngine.trigger("ERROR");
+        }
       };
 
       return true;
@@ -443,9 +710,18 @@ export class GeminiLiveWebSocketClient {
 
   /** Stop the session */
   public stopSession(): void {
-    wsTracer.log("SESSION", "Stopping session manually");
+    wsTracer.log("SESSION", "Stopping session manually by user");
+    this.isManualStop = true;
+    this.isReconnecting = false;
+    this.reconnectAttempts = 0;
+    this.clearReconnectTimer();
+
     if (this.ws) {
-      this.ws.close(1000, "User stopped session");
+      try {
+        this.ws.close(1000, "User stopped session");
+      } catch (e) {
+        wsTracer.warn("SESSION", "Error closing WebSocket", e);
+      }
       this.ws = null;
     }
     this.stopMicrophoneStream();
@@ -472,13 +748,42 @@ export class GeminiLiveWebSocketClient {
       if (response.setupComplete !== undefined) {
         wsTracer.log("PROTO", "✅ setupComplete received", response.setupComplete);
         this.isSetupComplete = true;
+        this.currentUserTurnMessageId = null;
         this.updateState({
-          statusMessage: "متصل لحظياً. تكلم بالسؤال والخيارات...",
+          statusMessage: "متصل لحظياً. تكلم بالسؤال والخيارات بالإنجليزية...",
         });
         this.addMessage({
           role: "system",
           text: "تم فتح الاتصال الحي عبر الويب سوكت. المايك يستمع باستمرار...",
         });
+
+        // 🔒 LANGUAGE ANCHOR CONTEXT SEEDING (تثبيت لغة الاستماع على الإنجليزية حصراً لمنع الكتابة بالعربي)
+        const languageAnchorPayload = {
+          clientContent: {
+            turns: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    text: "Language Lock: All questions and multiple-choice options in this conversation are strictly in English. Transcribe speech strictly in standard English Latin alphabet.",
+                  },
+                ],
+              },
+              {
+                role: "model",
+                parts: [
+                  {
+                    text: "Understood. Speech recognition is locked to English Latin text.",
+                  },
+                ],
+              },
+            ],
+            turnComplete: false,
+          },
+        };
+        wsTracer.log("SETUP", "Sending English Language Anchor turn to lock STT into English");
+        this.sendPayload("LANG_ANCHOR", languageAnchorPayload);
+
         this.startMicrophoneStream();
         return;
       }
@@ -497,12 +802,12 @@ export class GeminiLiveWebSocketClient {
         });
       }
 
-      // --- Input Transcription (user speech) ---
+      // --- Input Transcription (user speech) — Streaming into single consolidated message ---
       if (response.serverContent?.inputTranscription?.text) {
         const userText = response.serverContent.inputTranscription.text.trim();
-        wsTracer.log("TRANSCRIPT", `User: "${userText}"`);
+        wsTracer.log("TRANSCRIPT", `User chunk: "${userText}"`);
         if (userText) {
-          this.addMessage({ role: "user", text: userText });
+          this.updateOrAppendUserMessage(userText);
         }
       }
 
@@ -530,18 +835,37 @@ export class GeminiLiveWebSocketClient {
           const detectedCode = this.extractAnswerCode(modelText);
           wsTracer.log("ANSWER", `Detected code: [${detectedCode}] from "${modelText}"`);
 
-          hapticEngine.trigger(detectedCode);
+          if (detectedCode === "W") {
+            // Model signaled waiting for remaining options
+            wsTracer.log("ANSWER", "Model signaled WAIT ('W') — waiting for user to complete question and all 4 options");
+            hapticEngine.trigger("W");
 
-          this.updateState({
-            lastCode: detectedCode,
-            statusMessage: `تم تحديد الإجابة: [${detectedCode}] — الهزاز يعمل`,
-          });
+            this.updateState({
+              statusMessage: "النموذج يستمع وبانتظار استكمال باقي الخيارات...",
+            });
 
-          this.addMessage({
-            role: "model",
-            text: `الإجابة: [${detectedCode}]`,
-            code: detectedCode,
-          });
+            this.addMessage({
+              role: "model",
+              text: "بانتظار إكمال السؤال والخيارات...",
+              code: "W",
+            });
+          } else {
+            hapticEngine.trigger(detectedCode);
+
+            // Close the current active user turn so the NEXT question starts a fresh bubble
+            this.currentUserTurnMessageId = null;
+
+            this.updateState({
+              lastCode: detectedCode,
+              statusMessage: `تم تحديد الإجابة: [${detectedCode}] — الهزاز يعمل`,
+            });
+
+            this.addMessage({
+              role: "model",
+              text: `الإجابة: [${detectedCode}]`,
+              code: detectedCode,
+            });
+          }
         }
       }
 
@@ -550,9 +874,12 @@ export class GeminiLiveWebSocketClient {
         wsTracer.log("PROTO", "Turn complete");
         // Model finished speaking — re-enable mic sensitivity
         this._setModelSpeaking(false);
-        this.updateState({
-          statusMessage: "جاهز للسؤال التالي. تكلم الآن...",
-        });
+        if (this.state.lastCode !== "W") {
+          this.currentUserTurnMessageId = null;
+          this.updateState({
+            statusMessage: "جاهز للسؤال التالي. تكلم الآن...",
+          });
+        }
       }
 
     } catch (e) {
@@ -566,11 +893,11 @@ export class GeminiLiveWebSocketClient {
   /** Extract single answer code from model spoken text */
   private extractAnswerCode(text: string): AnswerCode {
     const upper = text.toUpperCase().trim();
-    const match = upper.match(/^[1234TF0]$/);
+    const match = upper.match(/^[1234TFW0]$/);
     if (match) return match[0] as AnswerCode;
 
     const firstChar = upper.replace(/\s/g, "")[0];
-    if (["1", "2", "3", "4", "T", "F", "0"].includes(firstChar)) {
+    if (["1", "2", "3", "4", "T", "F", "W", "0"].includes(firstChar)) {
       return firstChar as AnswerCode;
     }
     if (upper.includes("واحد") || upper.includes("أ") || upper.includes(" A ")) return "1";
@@ -579,6 +906,7 @@ export class GeminiLiveWebSocketClient {
     if (upper.includes("أربعة") || upper.includes("د") || upper.includes(" D ")) return "4";
     if (upper.includes("صح") || upper.includes("صواب") || upper.includes("TRUE")) return "T";
     if (upper.includes("خطأ") || upper.includes("غلط") || upper.includes("FALSE")) return "F";
+    if (upper.includes("WAIT") || upper.includes("W") || upper.includes("انتظر") || upper.includes("استمع")) return "W";
 
     return "0";
   }
@@ -801,6 +1129,7 @@ export class GeminiLiveWebSocketClient {
 
   /** Clear Chat History */
   public clearChat() {
+    this.currentUserTurnMessageId = null;
     this.updateState({ messages: [] });
   }
 }

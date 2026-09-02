@@ -16,6 +16,9 @@ import {
   Radio,
   User,
   Bot,
+  Activity,
+  Copy,
+  Check,
 } from "lucide-react";
 import {
   hapticEngine,
@@ -46,6 +49,8 @@ export default function Home() {
   const [hasVibrationAPI, setHasVibrationAPI] = useState<boolean>(true);
   const [showTester, setShowTester] = useState<boolean>(false);
   const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
+  const [copiedDiagnostic, setCopiedDiagnostic] = useState<boolean>(false);
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -94,6 +99,21 @@ export default function Home() {
     }
   };
 
+  // Handle Diagnostics Report
+  const handleCopyDiagnostics = () => {
+    const report = geminiLiveWs.getDiagnosticReport();
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(report).then(() => {
+        setCopiedDiagnostic(true);
+        setTimeout(() => setCopiedDiagnostic(false), 2000);
+      });
+    }
+  };
+
+  const handleDumpLogs = () => {
+    geminiLiveWs.dumpDebugLogs();
+  };
+
   // Toggle Sound Beep Simulator
   const handleToggleSound = () => {
     const nextVal = !soundEnabled;
@@ -136,6 +156,19 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Diagnostics Center Button */}
+          <button
+            onClick={() => setShowDiagnostics(!showDiagnostics)}
+            title="نظام تتبع وتشخيص الأخطاء الفوري"
+            className={`p-2.5 rounded-xl border transition-all ${
+              showDiagnostics
+                ? "bg-rose-950/40 border-rose-500/50 text-rose-400"
+                : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Activity className="w-5 h-5" />
+          </button>
+
           {/* Sound Simulator Button */}
           <button
             onClick={handleToggleSound}
@@ -324,43 +357,70 @@ export default function Home() {
                 لا يوجد رسائل بعد. ابدأ الجلسة وتحدث بالسؤال والخيارات.
               </p>
             ) : (
-              sessionState.messages.map((msg: ChatMessage) => (
-                <div
-                  key={msg.id}
-                  className={`p-3 rounded-2xl flex flex-col gap-1 ${
-                    msg.role === "user"
-                      ? "bg-slate-800/80 border border-slate-700/60 text-slate-200 mr-4"
-                      : msg.role === "model"
-                      ? "bg-cyan-950/40 border border-cyan-500/30 text-cyan-200 ml-4"
-                      : "bg-slate-950/60 text-slate-400 text-[11px] text-center"
-                  }`}
-                >
-                  <div className="flex items-center justify-between font-semibold">
-                    <span className="flex items-center gap-1.5">
-                      {msg.role === "user" && <User className="w-3.5 h-3.5 text-blue-400" />}
-                      {msg.role === "model" && <Bot className="w-3.5 h-3.5 text-cyan-400" />}
-                      {msg.role === "user" ? "المستخدم" : msg.role === "model" ? "النموذج اللمسي" : "النظام"}
-                    </span>
-                    <span className="text-[10px] text-slate-500">{msg.timestamp}</span>
-                  </div>
+              sessionState.messages.map((msg: ChatMessage, index: number) => {
+                const isLatestUser =
+                  msg.role === "user" &&
+                  sessionState.isConnected &&
+                  sessionState.isStreamingAudio &&
+                  index === sessionState.messages.length - 1;
 
-                  <p className="text-xs leading-relaxed font-medium">{msg.text}</p>
-
-                  {msg.code && (
-                    <div className="mt-1 flex items-center justify-between pt-1 border-t border-cyan-500/20">
-                      <span className="text-cyan-400 font-bold">
-                        {VIBRATION_PATTERNS[msg.code]?.labelAr}
+                return (
+                  <div
+                    key={msg.id}
+                    className={`p-3.5 rounded-2xl flex flex-col gap-2 transition-all ${
+                      msg.role === "user"
+                        ? "bg-gradient-to-br from-slate-800/90 to-slate-900/90 border border-slate-700/70 text-slate-100 shadow-md mr-2"
+                        : msg.role === "model"
+                        ? "bg-gradient-to-br from-cyan-950/60 to-blue-950/40 border border-cyan-500/40 text-cyan-100 shadow-lg shadow-cyan-950/20 ml-2"
+                        : "bg-slate-950/60 border border-slate-900 text-slate-400 text-[11px] text-center py-2"
+                    }`}
+                  >
+                    {/* Header: Role & Timestamp */}
+                    <div className="flex items-center justify-between font-semibold border-b border-white/5 pb-1.5">
+                      <span className="flex items-center gap-1.5">
+                        {msg.role === "user" && <User className="w-3.5 h-3.5 text-blue-400" />}
+                        {msg.role === "model" && <Bot className="w-3.5 h-3.5 text-cyan-400" />}
+                        <span className="text-xs font-bold text-slate-200">
+                          {msg.role === "user" ? "سؤال المستخدم" : msg.role === "model" ? "إجابة النموذج اللمسي" : "إشعار النظام"}
+                        </span>
+                        {isLatestUser && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded-full border border-cyan-500/40 mr-1 animate-pulse">
+                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+                            يستمع ويكتب...
+                          </span>
+                        )}
                       </span>
-                      <button
-                        onClick={() => hapticEngine.trigger(msg.code as AnswerCode)}
-                        className="text-[10px] px-2 py-0.5 rounded bg-cyan-900/60 text-cyan-300 hover:bg-cyan-800"
-                      >
-                        إعادة الهزة
-                      </button>
+                      <span className="text-[10px] text-slate-400 font-mono">{msg.timestamp}</span>
                     </div>
-                  )}
-                </div>
-              ))
+
+                    {/* Content Text */}
+                    <p className="text-xs sm:text-sm leading-relaxed font-medium select-text break-words" dir="auto">
+                      {msg.text}
+                    </p>
+
+                    {/* Model Answer Code Badge & Vibration Replay */}
+                    {msg.code && (
+                      <div className="mt-1 flex items-center justify-between pt-2 border-t border-cyan-500/20">
+                        <div className="flex items-center gap-1.5">
+                          <span className="px-2 py-0.5 rounded-md bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 font-bold text-xs">
+                            كود [{msg.code}]
+                          </span>
+                          <span className="text-xs font-semibold text-cyan-200">
+                            {VIBRATION_PATTERNS[msg.code]?.labelAr}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => hapticEngine.trigger(msg.code as AnswerCode)}
+                          className="text-[10px] px-2.5 py-1 rounded-lg bg-cyan-900/70 hover:bg-cyan-800 text-cyan-200 border border-cyan-500/30 flex items-center gap-1 transition-all"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>إعادة الهزة</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
             <div ref={chatEndRef} />
           </div>
@@ -406,6 +466,62 @@ export default function Home() {
         )}
 
         {/* ==================================================== */}
+        {/* DIAGNOSTICS & ERROR TRACKER PANEL */}
+        {/* ==================================================== */}
+        {showDiagnostics && (
+          <div className="w-full mt-4 p-5 rounded-3xl bg-slate-900/95 border border-rose-900/40 shadow-2xl space-y-3 animate-in fade-in slide-in-from-bottom-3 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+              <h3 className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                <Activity className="w-4 h-4 text-rose-400" />
+                مركز تشخيص وتتبع الأخطاء الفوري (Error Tracer)
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDumpLogs}
+                  className="px-2.5 py-1 text-[11px] rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium transition-all"
+                >
+                  طباعة بالكونسول
+                </button>
+                <button
+                  onClick={handleCopyDiagnostics}
+                  className="px-2.5 py-1 text-[11px] rounded-lg bg-cyan-900/60 hover:bg-cyan-800 text-cyan-300 font-medium flex items-center gap-1 transition-all"
+                >
+                  {copiedDiagnostic ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedDiagnostic ? "تم النسخ" : "نسخ التقرير"}
+                </button>
+              </div>
+            </div>
+
+            {/* Live Logs List */}
+            <div className="bg-black/60 rounded-xl p-3 border border-slate-800 font-mono text-[11px] text-slate-300 max-h-48 overflow-y-auto space-y-1 select-text">
+              {geminiLiveWs.getDebugLogs().slice(-15).map((line, i) => (
+                <div
+                  key={i}
+                  className={`leading-relaxed ${
+                    line.includes("❌")
+                      ? "text-rose-400 font-bold"
+                      : line.includes("⚠️")
+                      ? "text-amber-400"
+                      : line.includes("✅")
+                      ? "text-emerald-400"
+                      : "text-slate-400"
+                  }`}
+                >
+                  {line}
+                </div>
+              ))}
+              {geminiLiveWs.getDebugLogs().length === 0 && (
+                <div className="text-slate-500 italic">لا توجد لوقات مسجلة بعد. ابدأ الجلسة لتسجيل حركة الاتصال.</div>
+              )}
+            </div>
+
+            <p className="text-[10px] text-slate-500">
+              💡 يمكنك أيضاً كتابة <code className="text-cyan-400">__wsTracer.dumpLogs()</code> في كونسول المتصفح (F12) لطباعة التقرير الكامل.
+            </p>
+          </div>
+        )}
+
+        {/* ==================================================== */}
         {/* MANUAL VIBRATION TESTER (قاموس واختبار الهزات) */}
         {/* ==================================================== */}
         <div className="w-full mt-4">
@@ -430,6 +546,7 @@ export default function Home() {
                   { code: "4", label: "خيار (د)", sub: "4 هزات" },
                   { code: "T", label: "صـح (True)", sub: "هزة طويلة" },
                   { code: "F", label: "خـطـأ (False)", sub: "هزتان طويلتان" },
+                  { code: "W", label: "انتظار (W)", sub: "نبضتان هادئتان" },
                   { code: "0", label: "غير واضح", sub: "نبضات سريعة" },
                   { code: "START", label: "بدء المايك", sub: "نبضة تشغيل" },
                 ] as const
