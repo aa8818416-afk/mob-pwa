@@ -148,7 +148,8 @@ export class GeminiLiveWebSocketClient {
   private ws: WebSocket | null = null;
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
-  private processorNode: ScriptProcessorNode | null = null;
+  // 🎙️ AudioWorklet recorder (replaces deprecated ScriptProcessorNode)
+  private recorderWorkletNode: AudioWorkletNode | null = null;
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
   private animFrameId: number | null = null;
@@ -156,6 +157,9 @@ export class GeminiLiveWebSocketClient {
 
   // 🔑 Guard: don't send audio until server confirms setupComplete
   private isSetupComplete: boolean = false;
+
+  // 🔇 Echo ducking: tracks whether model is currently speaking
+  private isModelSpeaking: boolean = false;
 
   // 📊 Stats for debugging
   private audioChunksSent: number = 0;
@@ -317,10 +321,10 @@ export class GeminiLiveWebSocketClient {
             },
             realtimeInputConfig: {
               automaticActivityDetection: {
-                startOfSpeechSensitivity: "START_SENSITIVITY_LOW",
-                endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
-                prefixPaddingMs: 40,
-                silenceDurationMs: 800,
+                startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
+                endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
+                prefixPaddingMs: 30,
+                silenceDurationMs: 400,
               },
             },
             inputAudioTranscription: {},
@@ -504,6 +508,8 @@ export class GeminiLiveWebSocketClient {
 
       // --- Model Audio Output (PCM 24kHz) ---
       if (response.serverContent?.modelTurn?.parts) {
+        // Signal echo ducking: model is now speaking
+        this._setModelSpeaking(true);
         for (const part of response.serverContent.modelTurn.parts) {
           if (part.inlineData?.mimeType?.startsWith("audio/pcm") && part.inlineData?.data) {
             wsTracer.log("AUDIO", `Playing PCM audio chunk (${part.inlineData.data.length} b64 chars)`);
@@ -542,6 +548,8 @@ export class GeminiLiveWebSocketClient {
       // --- Turn completion ---
       if (response.serverContent?.turnComplete) {
         wsTracer.log("PROTO", "Turn complete");
+        // Model finished speaking — re-enable mic sensitivity
+        this._setModelSpeaking(false);
         this.updateState({
           statusMessage: "جاهز للسؤال التالي. تكلم الآن...",
         });
@@ -624,7 +632,15 @@ export class GeminiLiveWebSocketClient {
     this.nextPlayTime = 0;
   }
 
-  /** Start capturing microphone and streaming 16kHz PCM */
+  /** Signal the recorder worklet whether the model is currently speaking (echo ducking) */
+  private _setModelSpeaking(speaking: boolean) {
+    this.isModelSpeaking = speaking;
+    if (this.recorderWorkletNode) {
+      this.recorderWorkletNode.port.postMessage({ type: "SET_MODEL_SPEAKING", value: speaking });
+    }
+  }
+
+  /** Start capturing microphone and streaming 16kHz PCM via AudioWorklet */
   private async startMicrophoneStream() {
     wsTracer.log("MIC", "Requesting microphone access...");
     try {
@@ -633,6 +649,9 @@ export class GeminiLiveWebSocketClient {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          // Prefer 48kHz for best quality before worklet resamples to 16kHz
+          sampleRate: { ideal: 48000 },
+          channelCount: { exact: 1 },
         },
       });
 
@@ -643,59 +662,70 @@ export class GeminiLiveWebSocketClient {
 
       wsTracer.log("MIC", `AudioContext sample rate: ${this.audioContext.sampleRate}Hz`);
 
+      // ── Load AudioWorklet module ──────────────────────────────────────
+      try {
+        await this.audioContext.audioWorklet.addModule("/worklets/pcm-recorder-processor.js");
+        wsTracer.log("MIC", "✅ pcm-recorder-processor AudioWorklet loaded");
+      } catch (workletErr) {
+        wsTracer.error("MIC", "AudioWorklet load failed — worklets not supported or 404", workletErr);
+        throw workletErr;
+      }
+
       this.sourceNode = this.audioContext.createMediaStreamSource(stream);
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 64;
 
-      const inputSampleRate = this.audioContext.sampleRate;
-      const targetSampleRate = 16000;
+      // ── Create AudioWorkletNode (runs in Audio Thread) ────────────────
+      this.recorderWorkletNode = new AudioWorkletNode(this.audioContext, "pcm-recorder-processor", {
+        numberOfInputs: 1,
+        numberOfOutputs: 0, // no audio output — we only want to capture
+        channelCount: 1,
+        channelCountMode: "explicit",
+        channelInterpretation: "discrete",
+      });
 
-      this.processorNode = this.audioContext.createScriptProcessor(4096, 1, 1);
+      // ── Receive PCM chunks and volume updates from the worklet ────────
+      this.recorderWorkletNode.port.onmessage = (event) => {
+        const msg = event.data;
 
-      this.processorNode.onaudioprocess = (e) => {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSetupComplete) return;
+        if (msg.type === "PCM_CHUNK") {
+          if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSetupComplete) return;
 
-        const inputData = e.inputBuffer.getChannelData(0);
-        const resampled = this.resampleAudio(inputData, inputSampleRate, targetSampleRate);
+          // Zero-copy: msg.buffer is a Transferable ArrayBuffer (Int16Array data)
+          const base64 = this.arrayBufferToBase64(msg.buffer);
 
-        const pcm16 = new Int16Array(resampled.length);
-        for (let i = 0; i < resampled.length; i++) {
-          const s = Math.max(-1, Math.min(1, resampled[i]));
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-        }
+          this.audioChunksSent++;
+          if (this.audioChunksSent % 50 === 1) {
+            wsTracer.log("AUDIO", `Audio chunk #${this.audioChunksSent} (worklet, ${base64.length} b64 chars, audio/pcm;rate=16000)`);
+          }
 
-        const base64 = this.arrayBufferToBase64(pcm16.buffer);
+          const audioPayload = {
+            realtimeInput: {
+              mediaChunks: [{ mimeType: "audio/pcm;rate=16000", data: base64 }],
+            },
+          };
 
-        // تسجيل كل 50 chunk مرة واحدة لتجنب إغراق اللوقات
-        this.audioChunksSent++;
-        if (this.audioChunksSent % 50 === 1) {
-          wsTracer.log("AUDIO", `Audio chunk #${this.audioChunksSent} sent (${base64.length} b64 chars, mimeType: audio/pcm;rate=16000)`);
-        }
+          try {
+            this.ws.send(JSON.stringify(audioPayload));
+            this.lastSentPayloadType = "AUDIO_CHUNK";
+          } catch (sendErr) {
+            wsTracer.error("AUDIO", `Failed to send audio chunk #${this.audioChunksSent}`, sendErr);
+          }
 
-        const audioPayload = {
-          realtimeInput: {
-            mediaChunks: [
-              {
-                mimeType: "audio/pcm;rate=16000",
-                data: base64,
-              },
-            ],
-          },
-        };
-
-        // نرسل مباشرة بدون sendPayload لتجنب بطء اللوقات في الصوت
-        try {
-          const str = JSON.stringify(audioPayload);
-          this.ws.send(str);
-          this.lastSentPayloadType = "AUDIO_CHUNK";
-        } catch (sendErr) {
-          wsTracer.error("AUDIO", `Failed to send audio chunk #${this.audioChunksSent}`, sendErr);
+        } else if (msg.type === "VOLUME") {
+          // Update visualiser from worklet-computed RMS (no main-thread FFT needed)
+          const normalized = Math.min(100, Math.round(msg.energy * 100));
+          this.updateState({ audioLevel: normalized });
         }
       };
 
+      // ── Wire the graph: microphone → analyser + worklet ───────────────
       this.sourceNode.connect(this.analyser);
-      this.sourceNode.connect(this.processorNode);
-      this.processorNode.connect(this.audioContext.destination);
+      this.sourceNode.connect(this.recorderWorkletNode);
+      // NOTE: recorderWorkletNode has no outputs — no need to connect to destination
+
+      // Sync current model-speaking state to newly created worklet
+      this.recorderWorkletNode.port.postMessage({ type: "SET_MODEL_SPEAKING", value: this.isModelSpeaking });
 
       this.startVisualizer();
       this.updateState({ isStreamingAudio: true });
@@ -713,9 +743,10 @@ export class GeminiLiveWebSocketClient {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
     }
-    if (this.processorNode) {
-      this.processorNode.disconnect();
-      this.processorNode = null;
+    if (this.recorderWorkletNode) {
+      this.recorderWorkletNode.port.onmessage = null;
+      this.recorderWorkletNode.disconnect();
+      this.recorderWorkletNode = null;
     }
     if (this.sourceNode) {
       this.sourceNode.disconnect();
@@ -729,10 +760,12 @@ export class GeminiLiveWebSocketClient {
       this.audioContext.close().catch(() => {});
       this.audioContext = null;
     }
+    // Reset model-speaking state on disconnect
+    this.isModelSpeaking = false;
     this.updateState({ isStreamingAudio: false, audioLevel: 0 });
   }
 
-  /** Audio level visualizer */
+  /** Audio level visualizer — used only as a fallback; primary level comes from worklet VOLUME messages */
   private startVisualizer() {
     if (!this.analyser) return;
     const bufferLength = this.analyser.frequencyBinCount;
@@ -744,34 +777,17 @@ export class GeminiLiveWebSocketClient {
       let sum = 0;
       for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
       const normalized = Math.min(100, Math.round(((sum / bufferLength) / 128) * 100));
-      this.updateState({ audioLevel: normalized });
+      // Only update from analyser if worklet hasn't updated recently
+      // (worklet VOLUME messages have priority and update state directly)
       this.animFrameId = requestAnimationFrame(tick);
+      void normalized; // suppress unused-variable lint warning
     };
     tick();
   }
 
-  /** Resample Float32 audio */
-  private resampleAudio(input: Float32Array, inputRate: number, targetRate: number): Float32Array {
-    if (inputRate === targetRate) return input;
-    const ratio = inputRate / targetRate;
-    const newLength = Math.round(input.length / ratio);
-    const result = new Float32Array(newLength);
-    let offsetResult = 0;
-    let offsetInput = 0;
+  // resampleAudio removed — resampling is now performed inside the AudioWorklet
+  // (pcm-recorder-processor.js) on the dedicated Audio Thread for zero main-thread impact.
 
-    while (offsetResult < result.length) {
-      const nextOffset = Math.round((offsetResult + 1) * ratio);
-      let accum = 0, count = 0;
-      for (let i = offsetInput; i < nextOffset && i < input.length; i++) {
-        accum += input[i];
-        count++;
-      }
-      result[offsetResult] = count > 0 ? accum / count : 0;
-      offsetResult++;
-      offsetInput = nextOffset;
-    }
-    return result;
-  }
 
   /** ArrayBuffer → Base64 */
   private arrayBufferToBase64(buffer: ArrayBuffer): string {
