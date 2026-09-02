@@ -19,24 +19,126 @@ export interface LiveSessionState {
   messages: ChatMessage[];
 }
 
+// ═══════════════════════════════════════════
+// 🔍 ERROR TRACER — نظام تتبع الأخطاء
+// ═══════════════════════════════════════════
+class WsErrorTracer {
+  private logs: string[] = [];
+  private maxLogs = 200;
+
+  log(tag: string, message: string, data?: unknown) {
+    const ts = new Date().toISOString().split("T")[1].slice(0, 12);
+    const entry = data !== undefined
+      ? `[${ts}] [${tag}] ${message} → ${JSON.stringify(data, null, 2)}`
+      : `[${ts}] [${tag}] ${message}`;
+    this.logs.push(entry);
+    if (this.logs.length > this.maxLogs) this.logs.shift();
+    console.log(entry);
+  }
+
+  error(tag: string, message: string, data?: unknown) {
+    const ts = new Date().toISOString().split("T")[1].slice(0, 12);
+    const entry = data !== undefined
+      ? `[${ts}] ❌ [${tag}] ${message} → ${JSON.stringify(data, null, 2)}`
+      : `[${ts}] ❌ [${tag}] ${message}`;
+    this.logs.push(entry);
+    if (this.logs.length > this.maxLogs) this.logs.shift();
+    console.error(entry);
+  }
+
+  warn(tag: string, message: string, data?: unknown) {
+    const ts = new Date().toISOString().split("T")[1].slice(0, 12);
+    const entry = data !== undefined
+      ? `[${ts}] ⚠️ [${tag}] ${message} → ${JSON.stringify(data, null, 2)}`
+      : `[${ts}] ⚠️ [${tag}] ${message}`;
+    this.logs.push(entry);
+    if (this.logs.length > this.maxLogs) this.logs.shift();
+    console.warn(entry);
+  }
+
+  getCloseCodeInfo(code: number): string {
+    const codes: Record<number, string> = {
+      1000: "Normal Closure — إغلاق طبيعي",
+      1001: "Going Away — الصفحة تُغلق أو السيرفر يُعيد التشغيل",
+      1002: "Protocol Error — خطأ في البروتوكول",
+      1003: "Unsupported Data — نوع البيانات غير مدعوم (binary vs text)",
+      1005: "No Status Code — لا يوجد كود إغلاق",
+      1006: "Abnormal Closure — انقطع الاتصال بشكل مفاجئ بلا رسالة إغلاق",
+      1007: "Invalid Frame Payload — البيانات المرسلة غير صالحة (JSON مشوّه أو schema خاطئ)",
+      1008: "Policy Violation — انتهاك السياسة (مثلاً: API key منتهية أو غير مصرح)",
+      1009: "Message Too Big — الرسالة أكبر من الحد المسموح",
+      1010: "Missing Extension — امتداد مطلوب غير موجود",
+      1011: "Internal Error — خطأ داخلي في السيرفر",
+      1012: "Service Restart — السيرفر يُعيد التشغيل",
+      1013: "Try Again Later — حاول لاحقاً",
+      1015: "TLS Handshake Failure — فشل TLS",
+    };
+    return codes[code] ?? `كود غير معروف (${code})`;
+  }
+
+  diagnose1007(): string[] {
+    return [
+      "الأسباب المحتملة لخطأ 1007:",
+      "  1. حقل غير مدعوم في setup payload (مثل: contextWindowCompression, proactivity)",
+      "  2. تنسيق tools خاطئ (googleSearch يحتاج هيكل مختلف)",
+      "  3. sessionResumption.transparent غير مدعوم في هذا النموذج",
+      "  4. JSON مشوّه أو يحوي قيم undefined",
+      "  5. النموذج المختار لا يدعم responseModalities: [AUDIO]",
+      "  6. مشكلة في mimeType للصوت المرسل",
+    ];
+  }
+
+  dumpLogs(): void {
+    console.group("📋 WS Error Tracer — Full Log Dump");
+    this.logs.forEach((l) => console.log(l));
+    console.groupEnd();
+  }
+
+  getLogs(): string[] {
+    return [...this.logs];
+  }
+
+  clear() {
+    this.logs = [];
+  }
+}
+
+export const wsTracer = new WsErrorTracer();
+
+// ═══════════════════════════════════════════
+// 📡 PAYLOAD VALIDATOR — التحقق قبل الإرسال
+// ═══════════════════════════════════════════
+function safeStringify(payload: unknown): string | null {
+  try {
+    const str = JSON.stringify(payload);
+    // تحقق من أن JSON صالح بالكامل
+    JSON.parse(str);
+    return str;
+  } catch (e) {
+    wsTracer.error("PAYLOAD", "JSON stringify failed — payload is invalid", e);
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════
 const SYSTEM_INSTRUCTION = `
 You are an ultra-fast tactical AI assistant designed specifically for a deaf-blind user communicating via haptic vibrations.
 The user will speak a multiple-choice question, true/false question, or ask you to repeat/clarify.
 
-Determine the single correct answer and respond immediately.
+Determine the single correct answer and respond immediately by SPEAKING it aloud.
 
-OUTPUT RULES - VERY STRICT:
-OUTPUT EXACTLY ONE SINGLE CHARACTER AND NOTHING ELSE:
-- '1' : If the correct answer is Option 1 / (أ) / (A) / First option.
-- '2' : If the correct answer is Option 2 / (ب) / (B) / Second option.
-- '3' : If the correct answer is Option 3 / (ج) / (C) / Third option.
-- '4' : If the correct answer is Option 4 / (د) / (D) / Fourth option.
-- 'T' : If the statement is True / صح / صواب.
-- 'F' : If the statement is False / خطأ.
-- '0' : If the audio was unclear, inaudible, noisy, or incomplete.
+SPEECH OUTPUT RULES - VERY STRICT:
+Say ONLY one single character and nothing else:
+- Say "1" : If the correct answer is Option 1 / (أ) / (A) / First option.
+- Say "2" : If the correct answer is Option 2 / (ب) / (B) / Second option.
+- Say "3" : If the correct answer is Option 3 / (ج) / (C) / Third option.
+- Say "4" : If the correct answer is Option 4 / (د) / (D) / Fourth option.
+- Say "T" : If the statement is True / صح / صواب.
+- Say "F" : If the statement is False / خطأ.
+- Say "0" : If the audio was unclear, inaudible, noisy, or incomplete.
 
-If the user asks "أعد الإجابة" or "كرر" (repeat), output the code of the last question.
-NEVER output any words, pleasantries, punctuation, or markdown. Only the single character.
+If the user asks "أعد الإجابة" or "كرر" (repeat), say the code of the last question again.
+NEVER say any words, pleasantries, explanations, or sentences. Only the single character.
 `;
 
 export class GeminiLiveWebSocketClient {
@@ -48,6 +150,18 @@ export class GeminiLiveWebSocketClient {
   private analyser: AnalyserNode | null = null;
   private animFrameId: number | null = null;
   private stateChangeCallback?: (state: LiveSessionState) => void;
+
+  // 🔑 Guard: don't send audio until server confirms setupComplete
+  private isSetupComplete: boolean = false;
+
+  // 📊 Stats for debugging
+  private audioChunksSent: number = 0;
+  private messagesReceived: number = 0;
+  private lastSentPayloadType: string = "";
+
+  // Audio playback for model responses (24kHz PCM)
+  private playbackContext: AudioContext | null = null;
+  private nextPlayTime: number = 0;
 
   private state: LiveSessionState = {
     isConnected: false,
@@ -75,6 +189,16 @@ export class GeminiLiveWebSocketClient {
     return this.state;
   }
 
+  /** طباعة كل اللوقات في الكونسول */
+  public dumpDebugLogs(): void {
+    wsTracer.dumpLogs();
+  }
+
+  /** الحصول على اللوقات للعرض */
+  public getDebugLogs(): string[] {
+    return wsTracer.getLogs();
+  }
+
   private addMessage(message: Omit<ChatMessage, "id" | "timestamp">) {
     const newMsg: ChatMessage = {
       ...message,
@@ -85,17 +209,42 @@ export class GeminiLiveWebSocketClient {
         second: "2-digit",
       }),
     };
-
     this.updateState({
       messages: [...this.state.messages, newMsg],
     });
   }
 
-  /**
-   * Start Live WebSocket Session and Audio Stream
-   */
+  /** إرسال payload مع تسجيل كامل */
+  private sendPayload(label: string, payload: unknown): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      wsTracer.error("SEND", `Cannot send [${label}] — WS not open (state: ${this.ws?.readyState})`);
+      return false;
+    }
+
+    const str = safeStringify(payload);
+    if (!str) {
+      wsTracer.error("SEND", `Invalid payload for [${label}] — aborting send`);
+      return false;
+    }
+
+    wsTracer.log("SEND", `Sending [${label}] (${str.length} bytes)`);
+    this.lastSentPayloadType = label;
+
+    try {
+      this.ws.send(str);
+      return true;
+    } catch (e) {
+      wsTracer.error("SEND", `ws.send() threw exception for [${label}]`, e);
+      return false;
+    }
+  }
+
+  /** Start Live WebSocket Session */
   public async startSession(): Promise<boolean> {
     if (this.state.isConnected || this.state.isConnecting) return true;
+
+    wsTracer.clear();
+    wsTracer.log("SESSION", "Starting new session...");
 
     this.updateState({
       isConnecting: true,
@@ -103,37 +252,66 @@ export class GeminiLiveWebSocketClient {
     });
 
     try {
-      // 1. Fetch API credentials from session config endpoint
+      // 1. Fetch API credentials
+      wsTracer.log("SESSION", "Fetching API config from /api/session-config");
       const configRes = await fetch("/api/session-config");
+      if (!configRes.ok) {
+        wsTracer.error("SESSION", `Config fetch failed: ${configRes.status} ${configRes.statusText}`);
+        throw new Error(`Config fetch failed: ${configRes.status}`);
+      }
       const configData = await configRes.json();
       const apiKey = configData.apiKey;
-      const modelName = configData.model || "models/gemini-2.5-flash-native-audio-latest";
+      const rawModel = configData.model || "gemini-2.5-flash-native-audio-latest";
+      const modelName = rawModel.startsWith("models/") ? rawModel : `models/${rawModel}`;
 
-      // 2. Request WakeLock to keep screen and connection alive
+      if (!apiKey) {
+        wsTracer.error("SESSION", "API key is missing from config response", configData);
+        throw new Error("API key is missing");
+      }
+      wsTracer.log("SESSION", `API key loaded (length: ${apiKey.length}), model: ${modelName}`);
+
+      // 2. WakeLock
       await wakeLockManager.requestWakeLock();
 
-      // 3. Connect to Gemini Multimodal Live WebSocket
+      // 3. Open WebSocket
       const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+      wsTracer.log("WS", "Opening WebSocket connection...");
       this.ws = new WebSocket(wsUrl);
+      this.ws.binaryType = "arraybuffer";
 
       this.ws.onopen = () => {
-        console.log("WebSocket connected to Gemini Live");
+        wsTracer.log("WS", "✅ Connected to Gemini Live");
+
+        // Reset stats
+        this.isSetupComplete = false;
+        this.audioChunksSent = 0;
+        this.messagesReceived = 0;
+
         this.updateState({
           isConnected: true,
           isConnecting: false,
-          statusMessage: "متصل لحظياً. المايكروفون يستمع للسؤال...",
+          statusMessage: "جاري إرسال إعدادات الجلسة... انتظر لحظة",
         });
 
-        // Haptic feedback confirming connection
         hapticEngine.trigger("START");
 
-        // Send Setup Payload
+        // ═══════════════════════════════════════════════════════════════
+        // ✅ SETUP PAYLOAD
+        // ═══════════════════════════════════════════════════════════════
         const setupPayload = {
           setup: {
             model: modelName,
             generationConfig: {
-              responseModalities: ["TEXT"],
-              temperature: 0.2,
+              responseModalities: ["AUDIO"],
+              temperature: 0.7,
+              speechConfig: {
+                languageCode: "ar-EG",
+                voiceConfig: {
+                  prebuiltVoiceConfig: {
+                    voiceName: "Aoede",
+                  },
+                },
+              },
             },
             realtimeInputConfig: {
               automaticActivityDetection: {
@@ -151,64 +329,121 @@ export class GeminiLiveWebSocketClient {
           },
         };
 
-        this.ws?.send(JSON.stringify(setupPayload));
+        wsTracer.log("SETUP", "Sending setup payload", setupPayload.setup.model);
+        const sent = this.sendPayload("SETUP", setupPayload);
+
+        if (!sent) {
+          wsTracer.error("SETUP", "Failed to send setup payload");
+          this.updateState({ statusMessage: "فشل إرسال الإعدادات. تحقق من الكونسول." });
+          return;
+        }
 
         this.addMessage({
           role: "system",
-          text: "تم فتح الاتصال الحي عبر الويب سوكت. المايك يستمع باستمرار...",
+          text: "جاري تهيئة الجلسة مع النموذج...",
         });
-
-        // 4. Start Microphone Streaming (16kHz PCM)
-        this.startMicrophoneStream();
       };
 
-      this.ws.onmessage = (event) => {
-        this.handleServerMessage(event.data);
+      this.ws.onmessage = async (event) => {
+        this.messagesReceived++;
+        try {
+          let data: any;
+          if (event.data instanceof ArrayBuffer) {
+            const text = new TextDecoder().decode(event.data);
+            data = JSON.parse(text);
+          } else if (event.data instanceof Blob) {
+            const text = await event.data.text();
+            data = JSON.parse(text);
+          } else if (typeof event.data === "string") {
+            data = JSON.parse(event.data);
+          } else {
+            wsTracer.warn("RECV", "Unknown event.data type", typeof event.data);
+            return;
+          }
+          wsTracer.log("RECV", `Message #${this.messagesReceived} received`);
+          this.handleServerMessage(data);
+        } catch (e) {
+          wsTracer.error("PARSE", "Failed to parse server message", e);
+        }
       };
 
       this.ws.onerror = (error) => {
-        console.error("WebSocket Error:", error);
-        hapticEngine.trigger("ERROR");
-        this.updateState({
-          statusMessage: "حدث خطأ في اتصال الويب سوكت",
+        wsTracer.error("WS", "WebSocket onerror fired", {
+          type: error.type,
+          // event.error is usually null in browser WS errors
         });
+        hapticEngine.trigger("ERROR");
+        this.updateState({ statusMessage: "حدث خطأ في اتصال الويب سوكت — راجع الكونسول" });
       };
 
       this.ws.onclose = (event) => {
-        console.log("WebSocket Closed:", event.code, event.reason);
+        const codeInfo = wsTracer.getCloseCodeInfo(event.code);
+        const reason = event.reason || "(لا يوجد سبب)";
+
+        wsTracer.log("WS", `Connection closed`, {
+          code: event.code,
+          meaning: codeInfo,
+          reason,
+          wasClean: event.wasClean,
+          audioChunksSent: this.audioChunksSent,
+          messagesReceived: this.messagesReceived,
+          lastSentPayloadType: this.lastSentPayloadType,
+        });
+
+        // ⚠️ تشخيص خاص بخطأ 1007
+        if (event.code === 1007) {
+          wsTracer.error("DIAG", `=== 1007 DIAGNOSIS ===`);
+          const hints = wsTracer.diagnose1007();
+          hints.forEach((h) => wsTracer.error("DIAG", h));
+          wsTracer.error("DIAG", `Last payload type sent before close: [${this.lastSentPayloadType}]`);
+          wsTracer.error("DIAG", `Audio chunks sent before close: ${this.audioChunksSent}`);
+
+          // طباعة كل اللوقات للمساعدة في التشخيص
+          wsTracer.dumpLogs();
+        }
+
         this.stopMicrophoneStream();
+        this.stopPlaybackContext();
         wakeLockManager.releaseWakeLock();
+
+        // عرض سبب الإغلاق من السيرفر إن وُجد (مفيد جداً لتشخيص 1007)
+        const displayReason = event.reason
+          ? `${event.code}: ${event.reason}`
+          : `${event.code} — ${codeInfo}`;
+
         this.updateState({
           isConnected: false,
           isConnecting: false,
           isStreamingAudio: false,
-          statusMessage: "تم إغلاق الاتصال. اضغط للبدء من جديد.",
+          statusMessage: `⚠️ إغلاق الاتصال (${displayReason}). اضغط للبدء من جديد.`,
         });
+
+
         hapticEngine.trigger("STOP");
       };
 
       return true;
-    } catch (err: any) {
-      console.error("Failed to start live session:", err);
+    } catch (err: unknown) {
+      wsTracer.error("SESSION", "Failed to start session", err);
       hapticEngine.trigger("ERROR");
       this.updateState({
         isConnecting: false,
         isConnected: false,
-        statusMessage: "فشل بدء الاتصال. يرجى مراجعة المفتاح أو المايكروفون.",
+        statusMessage: "فشل بدء الاتصال. تأكد من مفتاح الـ API والمايكروفون.",
       });
       return false;
     }
   }
 
-  /**
-   * Stop the Live Session and close WebSocket
-   */
+  /** Stop the session */
   public stopSession(): void {
+    wsTracer.log("SESSION", "Stopping session manually");
     if (this.ws) {
-      this.ws.close();
+      this.ws.close(1000, "User stopped session");
       this.ws = null;
     }
     this.stopMicrophoneStream();
+    this.stopPlaybackContext();
     wakeLockManager.releaseWakeLock();
     hapticEngine.trigger("STOP");
 
@@ -216,85 +451,180 @@ export class GeminiLiveWebSocketClient {
       isConnected: false,
       isConnecting: false,
       isStreamingAudio: false,
-      statusMessage: "تم إيقاف الجلسة",
+      statusMessage: "تم إيقاف الجلسة. اضغط للبدء من جديد.",
     });
 
-    this.addMessage({
-      role: "system",
-      text: "تم إغلاق الجلسة الحية.",
-    });
+    this.addMessage({ role: "system", text: "تم إغلاق الجلسة الحية." });
   }
 
-  /**
-   * Handle incoming messages from Gemini Live WebSocket
-   */
-  private handleServerMessage(data: string) {
+  /** Handle messages from Gemini Live server */
+  private handleServerMessage(response: any) {
     try {
-      const response = JSON.parse(data);
+      if (!response) return;
 
-      // 1. Check for user audio transcription (STT)
-      if (response.serverContent?.userTurn?.parts) {
-        for (const part of response.serverContent.userTurn.parts) {
-          if (part.text && part.text.trim()) {
-            this.addMessage({
-              role: "user",
-              text: part.text.trim(),
-            });
-          }
+      // ✅ setupComplete
+      if (response.setupComplete !== undefined) {
+        wsTracer.log("PROTO", "✅ setupComplete received", response.setupComplete);
+        this.isSetupComplete = true;
+        this.updateState({
+          statusMessage: "متصل لحظياً. تكلم بالسؤال والخيارات...",
+        });
+        this.addMessage({
+          role: "system",
+          text: "تم فتح الاتصال الحي عبر الويب سوكت. المايك يستمع باستمرار...",
+        });
+        this.startMicrophoneStream();
+        return;
+      }
+
+      // --- Session Resumption ---
+      if (response.sessionResumptionUpdate) {
+        wsTracer.log("PROTO", "Session token refreshed");
+      }
+
+      // --- Error from server ---
+      if (response.error) {
+        wsTracer.error("SERVER_ERR", "Server sent error message", response.error);
+        this.addMessage({
+          role: "system",
+          text: `خطأ من السيرفر: ${response.error.message || JSON.stringify(response.error)}`,
+        });
+      }
+
+      // --- Input Transcription (user speech) ---
+      if (response.serverContent?.inputTranscription?.text) {
+        const userText = response.serverContent.inputTranscription.text.trim();
+        wsTracer.log("TRANSCRIPT", `User: "${userText}"`);
+        if (userText) {
+          this.addMessage({ role: "user", text: userText });
         }
       }
 
-      // 2. Check for model generated output
+      // --- Model Audio Output (PCM 24kHz) ---
       if (response.serverContent?.modelTurn?.parts) {
         for (const part of response.serverContent.modelTurn.parts) {
-          if (part.text) {
-            const rawText = part.text.trim();
-            const upper = rawText.toUpperCase();
-            
-            // Extract the target code
-            let detectedCode: AnswerCode = "0";
-            const match = upper.match(/[1234TF0]/);
-            if (match) {
-              detectedCode = match[0] as AnswerCode;
-            } else if (upper.includes("أ") || upper.includes("A")) {
-              detectedCode = "1";
-            } else if (upper.includes("ب") || upper.includes("B")) {
-              detectedCode = "2";
-            } else if (upper.includes("ج") || upper.includes("C")) {
-              detectedCode = "3";
-            } else if (upper.includes("د") || upper.includes("D")) {
-              detectedCode = "4";
-            } else if (upper.includes("صح") || upper.includes("TRUE")) {
-              detectedCode = "T";
-            } else if (upper.includes("خطأ") || upper.includes("FALSE")) {
-              detectedCode = "F";
-            }
-
-            // TRIGGER HAPTIC ENGINE IMMEDIATELY! 📳
-            hapticEngine.trigger(detectedCode);
-
-            this.updateState({
-              lastCode: detectedCode,
-              statusMessage: `تم تحديد الإجابة: [${detectedCode}] - تم إرسال الهزاز`,
-            });
-
-            this.addMessage({
-              role: "model",
-              text: `الإجابة المحددة: [${detectedCode}]`,
-              code: detectedCode,
-            });
+          if (part.inlineData?.mimeType?.startsWith("audio/pcm") && part.inlineData?.data) {
+            wsTracer.log("AUDIO", `Playing PCM audio chunk (${part.inlineData.data.length} b64 chars)`);
+            this.playPcmAudio(part.inlineData.data);
+          }
+          // تسجيل أي أجزاء غير متوقعة
+          if (!part.inlineData && !part.text) {
+            wsTracer.warn("PROTO", "Unknown part type in modelTurn", Object.keys(part));
           }
         }
       }
+
+      // --- Output Transcription (model speech) ---
+      if (response.serverContent?.outputTranscription?.text) {
+        const modelText = response.serverContent.outputTranscription.text.trim();
+        wsTracer.log("TRANSCRIPT", `Model: "${modelText}"`);
+        if (modelText) {
+          const detectedCode = this.extractAnswerCode(modelText);
+          wsTracer.log("ANSWER", `Detected code: [${detectedCode}] from "${modelText}"`);
+
+          hapticEngine.trigger(detectedCode);
+
+          this.updateState({
+            lastCode: detectedCode,
+            statusMessage: `تم تحديد الإجابة: [${detectedCode}] — الهزاز يعمل`,
+          });
+
+          this.addMessage({
+            role: "model",
+            text: `الإجابة: [${detectedCode}]`,
+            code: detectedCode,
+          });
+        }
+      }
+
+      // --- Turn completion ---
+      if (response.serverContent?.turnComplete) {
+        wsTracer.log("PROTO", "Turn complete");
+        this.updateState({
+          statusMessage: "جاهز للسؤال التالي. تكلم الآن...",
+        });
+      }
+
     } catch (e) {
-      console.warn("Failed to parse live server message:", e);
+      wsTracer.error("PARSE", "Failed to process server message", {
+        error: String(e),
+        responsePreview: typeof response === "object" ? JSON.stringify(response).slice(0, 200) : String(response).slice(0, 200),
+      });
     }
   }
 
-  /**
-   * Start capturing microphone and downsampling to 16kHz PCM chunks
-   */
+  /** Extract single answer code from model spoken text */
+  private extractAnswerCode(text: string): AnswerCode {
+    const upper = text.toUpperCase().trim();
+    const match = upper.match(/^[1234TF0]$/);
+    if (match) return match[0] as AnswerCode;
+
+    const firstChar = upper.replace(/\s/g, "")[0];
+    if (["1", "2", "3", "4", "T", "F", "0"].includes(firstChar)) {
+      return firstChar as AnswerCode;
+    }
+    if (upper.includes("واحد") || upper.includes("أ") || upper.includes(" A ")) return "1";
+    if (upper.includes("اثنين") || upper.includes("ب") || upper.includes(" B ")) return "2";
+    if (upper.includes("ثلاثة") || upper.includes("ج") || upper.includes(" C ")) return "3";
+    if (upper.includes("أربعة") || upper.includes("د") || upper.includes(" D ")) return "4";
+    if (upper.includes("صح") || upper.includes("صواب") || upper.includes("TRUE")) return "T";
+    if (upper.includes("خطأ") || upper.includes("غلط") || upper.includes("FALSE")) return "F";
+
+    return "0";
+  }
+
+  /** Play PCM audio from model (24kHz Base64) */
+  private playPcmAudio(base64Data: string) {
+    try {
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (!this.playbackContext || this.playbackContext.state === "closed") {
+        this.playbackContext = new AudioCtx();
+        this.nextPlayTime = this.playbackContext.currentTime;
+      }
+
+      if (this.playbackContext.state === "suspended") {
+        this.playbackContext.resume();
+      }
+
+      const binary = atob(base64Data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+
+      const int16 = new Int16Array(bytes.buffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768;
+      }
+
+      const sampleRate = 24000;
+      const audioBuffer = this.playbackContext.createBuffer(1, float32.length, sampleRate);
+      audioBuffer.copyToChannel(float32, 0);
+
+      const source = this.playbackContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.playbackContext.destination);
+
+      const startTime = Math.max(this.playbackContext.currentTime, this.nextPlayTime);
+      source.start(startTime);
+      this.nextPlayTime = startTime + audioBuffer.duration;
+    } catch (err) {
+      wsTracer.error("PLAYBACK", "PCM audio play error", err);
+    }
+  }
+
+  private stopPlaybackContext() {
+    if (this.playbackContext && this.playbackContext.state !== "closed") {
+      this.playbackContext.close().catch(() => {});
+      this.playbackContext = null;
+    }
+    this.nextPlayTime = 0;
+  }
+
+  /** Start capturing microphone and streaming 16kHz PCM */
   private async startMicrophoneStream() {
+    wsTracer.log("MIC", "Requesting microphone access...");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -304,144 +634,122 @@ export class GeminiLiveWebSocketClient {
         },
       });
 
+      wsTracer.log("MIC", "✅ Microphone stream started");
       this.mediaStream = stream;
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.audioContext = new AudioCtx();
+
+      wsTracer.log("MIC", `AudioContext sample rate: ${this.audioContext.sampleRate}Hz`);
 
       this.sourceNode = this.audioContext.createMediaStreamSource(stream);
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 64;
 
-      // ScriptProcessorNode for real-time PCM streaming
-      this.processorNode = this.audioContext.createScriptProcessor(4096, 1, 1);
-
       const inputSampleRate = this.audioContext.sampleRate;
       const targetSampleRate = 16000;
 
+      this.processorNode = this.audioContext.createScriptProcessor(4096, 1, 1);
+
       this.processorNode.onaudioprocess = (e) => {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSetupComplete) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
+        const resampled = this.resampleAudio(inputData, inputSampleRate, targetSampleRate);
 
-        // 1. Resample from hardware sampleRate to 16kHz
-        const resampledData = this.resampleAudio(
-          inputData,
-          inputSampleRate,
-          targetSampleRate
-        );
-
-        // 2. Convert Float32Array to 16-bit PCM (Int16Array)
-        const pcm16 = new Int16Array(resampledData.length);
-        for (let i = 0; i < resampledData.length; i++) {
-          const s = Math.max(-1, Math.min(1, resampledData[i]));
+        const pcm16 = new Int16Array(resampled.length);
+        for (let i = 0; i < resampled.length; i++) {
+          const s = Math.max(-1, Math.min(1, resampled[i]));
           pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
 
-        // 3. Convert Int16Array to Base64
-        const base64PCM = this.arrayBufferToBase64(pcm16.buffer);
+        const base64 = this.arrayBufferToBase64(pcm16.buffer);
 
-        // 4. Send realtimeInput chunk over WebSocket
+        // تسجيل كل 50 chunk مرة واحدة لتجنب إغراق اللوقات
+        this.audioChunksSent++;
+        if (this.audioChunksSent % 50 === 1) {
+          wsTracer.log("AUDIO", `Audio chunk #${this.audioChunksSent} sent (${base64.length} b64 chars, mimeType: audio/pcm;rate=16000)`);
+        }
+
         const audioPayload = {
           realtimeInput: {
             mediaChunks: [
               {
                 mimeType: "audio/pcm;rate=16000",
-                data: base64PCM,
+                data: base64,
               },
             ],
           },
         };
 
-        this.ws.send(JSON.stringify(audioPayload));
+        // نرسل مباشرة بدون sendPayload لتجنب بطء اللوقات في الصوت
+        try {
+          const str = JSON.stringify(audioPayload);
+          this.ws.send(str);
+          this.lastSentPayloadType = "AUDIO_CHUNK";
+        } catch (sendErr) {
+          wsTracer.error("AUDIO", `Failed to send audio chunk #${this.audioChunksSent}`, sendErr);
+        }
       };
 
       this.sourceNode.connect(this.analyser);
       this.sourceNode.connect(this.processorNode);
       this.processorNode.connect(this.audioContext.destination);
 
-      // Start audio visualizer
       this.startVisualizer();
-
-      this.updateState({
-        isStreamingAudio: true,
-      });
+      this.updateState({ isStreamingAudio: true });
     } catch (err) {
-      console.error("Microphone capture failed:", err);
+      wsTracer.error("MIC", "Microphone capture failed", err);
       hapticEngine.trigger("ERROR");
-      this.updateState({
-        statusMessage: "تعذر تشغيل المايكروفون. يرجى منح الإذن.",
-      });
+      this.updateState({ statusMessage: "تعذر تشغيل المايكروفون. يرجى منح الإذن." });
     }
   }
 
-  /**
-   * Stop microphone audio stream
-   */
+  /** Stop mic stream */
   private stopMicrophoneStream() {
+    wsTracer.log("MIC", `Stopping mic stream (total chunks sent: ${this.audioChunksSent})`);
     if (this.animFrameId) {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
     }
-
     if (this.processorNode) {
       this.processorNode.disconnect();
       this.processorNode = null;
     }
-
     if (this.sourceNode) {
       this.sourceNode.disconnect();
       this.sourceNode = null;
     }
-
     if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach((track) => track.stop());
+      this.mediaStream.getTracks().forEach((t) => t.stop());
       this.mediaStream = null;
     }
-
     if (this.audioContext && this.audioContext.state !== "closed") {
       this.audioContext.close().catch(() => {});
       this.audioContext = null;
     }
-
-    this.updateState({
-      isStreamingAudio: false,
-      audioLevel: 0,
-    });
+    this.updateState({ isStreamingAudio: false, audioLevel: 0 });
   }
 
-  /**
-   * Visualizer level ticker
-   */
+  /** Audio level visualizer */
   private startVisualizer() {
     if (!this.analyser) return;
     const bufferLength = this.analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
 
-    const checkVolume = () => {
+    const tick = () => {
       if (!this.state.isStreamingAudio || !this.analyser) return;
       this.analyser.getByteFrequencyData(dataArray);
       let sum = 0;
-      for (let i = 0; i < bufferLength; i++) {
-        sum += dataArray[i];
-      }
-      const avg = sum / bufferLength;
-      const normalized = Math.min(100, Math.round((avg / 128) * 100));
-
+      for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
+      const normalized = Math.min(100, Math.round(((sum / bufferLength) / 128) * 100));
       this.updateState({ audioLevel: normalized });
-      this.animFrameId = requestAnimationFrame(checkVolume);
+      this.animFrameId = requestAnimationFrame(tick);
     };
-
-    checkVolume();
+    tick();
   }
 
-  /**
-   * Resamples Float32 audio buffer to 16,000 Hz
-   */
-  private resampleAudio(
-    input: Float32Array,
-    inputRate: number,
-    targetRate: number
-  ): Float32Array {
+  /** Resample Float32 audio */
+  private resampleAudio(input: Float32Array, inputRate: number, targetRate: number): Float32Array {
     if (inputRate === targetRate) return input;
     const ratio = inputRate / targetRate;
     const newLength = Math.round(input.length / ratio);
@@ -450,37 +758,30 @@ export class GeminiLiveWebSocketClient {
     let offsetInput = 0;
 
     while (offsetResult < result.length) {
-      const nextOffsetInput = Math.round((offsetResult + 1) * ratio);
-      let accum = 0;
-      let count = 0;
-      for (let i = offsetInput; i < nextOffsetInput && i < input.length; i++) {
+      const nextOffset = Math.round((offsetResult + 1) * ratio);
+      let accum = 0, count = 0;
+      for (let i = offsetInput; i < nextOffset && i < input.length; i++) {
         accum += input[i];
         count++;
       }
       result[offsetResult] = count > 0 ? accum / count : 0;
       offsetResult++;
-      offsetInput = nextOffsetInput;
+      offsetInput = nextOffset;
     }
-
     return result;
   }
 
-  /**
-   * Helper to convert ArrayBuffer to Base64
-   */
+  /** ArrayBuffer → Base64 */
   private arrayBufferToBase64(buffer: ArrayBuffer): string {
     let binary = "";
     const bytes = new Uint8Array(buffer);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
+    for (let i = 0; i < bytes.byteLength; i++) {
       binary += String.fromCharCode(bytes[i]);
     }
     return btoa(binary);
   }
 
-  /**
-   * Clear Chat History
-   */
+  /** Clear Chat History */
   public clearChat() {
     this.updateState({ messages: [] });
   }

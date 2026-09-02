@@ -25,7 +25,7 @@ Rules:
 
 export async function POST(req: NextRequest) {
   try {
-    const apiKey = process.env.GEMINI_API_KEY || "1cbda7d1-6ad6-4940-9175-50bc5d435cff";
+    const apiKey = process.env.GEMINI_API_KEY || "";
     const customModelName = process.env.GEMINI_MODEL || "gemini-2.5-flash-native-audio-latest";
 
     // Handle formData (audio file) or JSON (audio base64 / text)
