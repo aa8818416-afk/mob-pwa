@@ -968,9 +968,11 @@ export class GeminiLiveWebSocketClient {
           const detectedCode = this.extractAnswerCode(modelText);
           wsTracer.log("ANSWER", `Detected code: [${detectedCode}] from "${modelText}"`);
 
+          const isDefinitiveAnswer = ["1", "2", "3", "4", "T", "F"].includes(detectedCode);
+
           if (detectedCode === "W") {
-            // Model signaled waiting for remaining options
-            wsTracer.log("ANSWER", "Model signaled WAIT ('W') — waiting for user to complete question and all 4 options");
+            // Model signaled waiting for remaining options — do NOT reset!
+            wsTracer.log("ANSWER", "Model signaled WAIT ('W') — waiting for user to complete question and all 4 options (no reset)");
             hapticEngine.trigger("W");
 
             this.updateState({
@@ -979,10 +981,25 @@ export class GeminiLiveWebSocketClient {
 
             this.addMessage({
               role: "model",
-              text: "بانتظار إكمال السؤال والخيارات...",
+              text: "بانتظار إكمال باقي الخيارات...",
               code: "W",
             });
-          } else {
+          } else if (detectedCode === "0") {
+            // Model signaled unclear / background noise — do NOT reset! User can repeat in same turn
+            wsTracer.log("ANSWER", "Model signaled UNCLEAR / NOISE ('0') — alerting user to repeat question (no reset)");
+            hapticEngine.trigger("0");
+
+            this.updateState({
+              statusMessage: "الكلام غير واضح أو ضوضاء. يرجى تكرار السؤال...",
+            });
+
+            this.addMessage({
+              role: "model",
+              text: "غير مفهوم أو ضوضاء. يرجى تكرار السؤال...",
+              code: "0",
+            });
+          } else if (isDefinitiveAnswer) {
+            // 🎯 Real answer detected (1, 2, 3, 4, T, F)!
             hapticEngine.trigger(detectedCode);
 
             // Close the current active user turn so the NEXT question starts a fresh bubble
@@ -999,8 +1016,8 @@ export class GeminiLiveWebSocketClient {
               code: detectedCode,
             });
 
-            // 🔄 Schedule soft reset after answer — 700ms delay lets haptic vibrations finish completely
-            wsTracer.log("SESSION", `Scheduling soft reset in 700ms after answer [${detectedCode}] (Turn ${this.questionTurnCount + 1})`);
+            // 🔄 Schedule soft reset ONLY after a real definitive answer (1, 2, 3, 4, T, F)
+            wsTracer.log("SESSION", `Scheduling soft reset in 700ms after definitive answer [${detectedCode}] (Turn ${this.questionTurnCount + 1})`);
             this.scheduleSoftReset(700);
           }
         }
@@ -1011,11 +1028,12 @@ export class GeminiLiveWebSocketClient {
         wsTracer.log("PROTO", "Turn complete");
         // Model finished speaking — re-enable mic sensitivity
         this._setModelSpeaking(false);
-        if (this.state.lastCode !== "W") {
+        // Only schedule fallback reset if there is an actual definitive answer (1, 2, 3, 4, T, F)
+        const hasDefinitiveAnswer = this.state.lastCode && ["1", "2", "3", "4", "T", "F"].includes(this.state.lastCode);
+        if (hasDefinitiveAnswer) {
           this.currentUserTurnMessageId = null;
-          // Ensure soft reset is scheduled if it hasn't been already
           if (!this.softResetTimer && !this.isSoftResetting) {
-            wsTracer.log("SESSION", `Turn complete with answer [${this.state.lastCode}] — scheduling fallback soft reset`);
+            wsTracer.log("SESSION", `Turn complete with definitive answer [${this.state.lastCode}] — scheduling fallback soft reset`);
             this.scheduleSoftReset(500);
           }
         }
