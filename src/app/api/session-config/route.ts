@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-export function resolveLiveModelName(modelName?: string | null): string {
+function resolveLiveModelName(modelName?: string | null): string {
   if (!modelName) return "models/gemini-2.5-flash-native-audio-latest";
   const name = modelName.trim();
   if (name.startsWith("models/")) return name;
