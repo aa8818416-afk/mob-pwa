@@ -128,6 +128,7 @@ The user will speak a multiple-choice question, true/false question, or ask to r
 
 Understand the question accurately in whichever language it is spoken.
 Determine the single correct answer and respond immediately by SPEAKING it aloud.
+Rely purely and instantly on your internal parametric knowledge. Do NOT perform web searches, browsing, or multi-step research.
 
 SPEECH OUTPUT RULES - VERY STRICT:
 Say ONLY one single character and nothing else:
@@ -305,7 +306,7 @@ export class GeminiLiveWebSocketClient {
             model: modelName,
             generationConfig: {
               responseModalities: ["AUDIO"],
-              temperature: 0.7,
+              temperature: 0.1,
               speechConfig: {
                 voiceConfig: {
                   prebuiltVoiceConfig: {
