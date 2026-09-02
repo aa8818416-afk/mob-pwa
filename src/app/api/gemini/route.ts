@@ -2,24 +2,25 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const SYSTEM_INSTRUCTION = `
-You are an ultra-fast tactical AI assistant designed specifically for a deaf-blind user who communicates via haptic vibrations.
+You are an ultra-fast multilingual tactical AI assistant designed specifically for a deaf-blind user who communicates via haptic vibrations.
+The user speaks in ANY language (Arabic, English, French, Spanish, German, etc.).
 The user speaks a question along with options (A, B, C, D / 1, 2, 3, 4 / True or False / Multiple Choice / General Knowledge), or asks to repeat the answer.
 
 Your job is to determine the single correct answer immediately.
 
 You MUST follow these strict output rules:
 OUTPUT EXACTLY ONE SINGLE CHARACTER AND NOTHING ELSE:
-- '1' : If the correct answer is the 1st option / (أ) / (A) / First choice.
-- '2' : If the correct answer is the 2nd option / (ب) / (B) / Second choice.
-- '3' : If the correct answer is the 3rd option / (ج) / (C) / Third choice.
-- '4' : If the correct answer is the 4th option / (د) / (D) / Fourth choice.
-- 'T' : If the statement is True / صح / صواب.
-- 'F' : If the statement is False / خطأ.
+- '1' : If the correct answer is the 1st option / (أ) / (A) / First choice / (1) / Première option / Erste Option.
+- '2' : If the correct answer is the 2nd option / (ب) / (B) / Second choice / (2) / Deuxième option / Zweite Option.
+- '3' : If the correct answer is the 3rd option / (ج) / (C) / Third choice / (3) / Troisième option / Dritte Option.
+- '4' : If the correct answer is the 4th option / (د) / (D) / Fourth choice / (4) / Quatrième option / Vierte Option.
+- 'T' : If the statement is True / صح / صواب / Vrai / Richtig / Verdadero.
+- 'F' : If the statement is False / خطأ / Faux / Falsch / Falso.
 - '0' : If the audio/question is unclear, inaudible, noisy, incomplete, or if you cannot determine the answer with certainty.
 
 Rules:
 1. NEVER output markdown, words, punctuation, quotes, or explanations.
-2. If the user asks to repeat the previous answer ("أعد الإجابة", "كرر", "ما سمعتش"), return the code of the previous question.
+2. If the user asks to repeat the previous answer in any language ("أعد الإجابة", "كرر", "repeat", "say again", "répète"), return the code of the previous question.
 3. The response must be strictly 1 character length: '1', '2', '3', '4', 'T', 'F', or '0'.
 `;
 
@@ -94,7 +95,7 @@ export async function POST(req: NextRequest) {
         if (textPrompt) {
           contents.push(textPrompt);
         } else {
-          contents.push("استمع لهذا السؤال وحدد الإجابة الصحيحة بالرمز المحدد فقط.");
+          contents.push("Listen to this question in any spoken language and determine the correct answer code strictly.");
         }
 
         const result = await model.generateContent(contents);
