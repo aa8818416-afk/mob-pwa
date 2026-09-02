@@ -253,6 +253,7 @@ export class GeminiLiveWebSocketClient {
   private softResetTimer: ReturnType<typeof setTimeout> | null = null;
   private cachedApiKey: string = "";
   private cachedModelName: string = "";
+  private questionTurnCount: number = 0;
 
   constructor() {
     this.setupNetworkListeners();
@@ -517,6 +518,7 @@ export class GeminiLiveWebSocketClient {
 
       this.cachedApiKey = apiKey;
       this.cachedModelName = modelName;
+      this.questionTurnCount = 0;
 
       // 2. WakeLock
       await wakeLockManager.requestWakeLock();
@@ -561,7 +563,7 @@ export class GeminiLiveWebSocketClient {
         isConnected: true,
         isConnecting: false,
         statusMessage: isSoftReset
-          ? "جاهز للسؤال التالي (ذاكرة نقية)... تكلم الآن"
+          ? `جاهز للسؤال [${this.questionTurnCount + 1}] (ذاكرة نقية)... تكلم الآن`
           : wasReconnecting
           ? "✅ تمت استعادة الاتصال بنجاح! جاري تهيئة الجلسة..."
           : "جاري إرسال إعدادات الجلسة... انتظر لحظة",
@@ -762,28 +764,38 @@ export class GeminiLiveWebSocketClient {
    * and starts a 100% clean context session with Gemini Live for the next question.
    */
   public softResetSessionForNextTurn(): void {
-    if (!this.state.isConnected || this.isManualStop) return;
+    if (this.isManualStop) return;
 
-    wsTracer.log("SESSION", "🔄 Initiating seamless soft reset for next question (clean memory)...");
+    this.questionTurnCount++;
+    wsTracer.log("SESSION", `🔄 Initiating seamless soft reset for question #${this.questionTurnCount + 1} (clean 0-token memory)...`);
     this.isSoftResetting = true;
     this.isSetupComplete = false;
     this.currentUserTurnMessageId = null;
+    this.clearSoftResetTimer();
 
     // Release model speaking ducking so mic is completely active
     this._setModelSpeaking(false);
 
-    // 1. Close current WebSocket cleanly
+    // 1. Cleanly detach ALL event listeners from old WebSocket before closing.
+    // This prevents ghost 'onclose' / 'onerror' events from firing after the new socket opens,
+    // which previously corrupted connection state and prevented soft reset on question 2+!
     if (this.ws) {
+      const oldWs = this.ws;
+      this.ws = null;
+      oldWs.onopen = null;
+      oldWs.onmessage = null;
+      oldWs.onerror = null;
+      oldWs.onclose = null;
       try {
-        this.ws.close(1000, "Soft reset for next question");
+        oldWs.close(1000, "Soft reset for next turn");
       } catch (e) {
         wsTracer.warn("SESSION", "WS close notice during soft reset", e);
       }
-      this.ws = null;
     }
 
     this.updateState({
-      statusMessage: "جاري تجهيز الذاكرة للسؤال التالي...",
+      lastCode: null,
+      statusMessage: `جاري تجهيز الذاكرة للسؤال [${this.questionTurnCount + 1}] (ذاكرة نقية)...`,
     });
 
     const apiKey = this.cachedApiKey;
@@ -803,6 +815,8 @@ export class GeminiLiveWebSocketClient {
   private scheduleSoftReset(delayMs: number = 700) {
     this.clearSoftResetTimer();
     this.softResetTimer = setTimeout(() => {
+      // ⚡ CRITICAL: Nullify timer reference immediately so future turns can schedule cleanly!
+      this.softResetTimer = null;
       this.softResetSessionForNextTurn();
     }, delayMs);
   }
@@ -816,14 +830,20 @@ export class GeminiLiveWebSocketClient {
     this.isReconnecting = false;
     this.reconnectAttempts = 0;
     this.clearReconnectTimer();
+    this.questionTurnCount = 0;
 
     if (this.ws) {
+      const oldWs = this.ws;
+      this.ws = null;
+      oldWs.onopen = null;
+      oldWs.onmessage = null;
+      oldWs.onerror = null;
+      oldWs.onclose = null;
       try {
-        this.ws.close(1000, "User stopped session");
+        oldWs.close(1000, "User stopped session");
       } catch (e) {
         wsTracer.warn("SESSION", "Error closing WebSocket", e);
       }
-      this.ws = null;
     }
     this.stopMicrophoneStream();
     this.stopPlaybackContext();
@@ -834,6 +854,7 @@ export class GeminiLiveWebSocketClient {
       isConnected: false,
       isConnecting: false,
       isStreamingAudio: false,
+      lastCode: null,
       statusMessage: "تم إيقاف الجلسة. اضغط للبدء من جديد.",
     });
 
@@ -855,7 +876,7 @@ export class GeminiLiveWebSocketClient {
 
         this.updateState({
           statusMessage: isSoftResetSetup
-            ? "جاهز للسؤال التالي (ذاكرة نقية)... تكلم الآن"
+            ? `جاهز للسؤال [${this.questionTurnCount + 1}] (ذاكرة نقية)... تكلم الآن`
             : "متصل لحظياً. تكلم بالسؤال والخيارات بالإنجليزية...",
         });
 
@@ -979,7 +1000,7 @@ export class GeminiLiveWebSocketClient {
             });
 
             // 🔄 Schedule soft reset after answer — 700ms delay lets haptic vibrations finish completely
-            wsTracer.log("SESSION", `Scheduling soft reset in 700ms after answer [${detectedCode}]`);
+            wsTracer.log("SESSION", `Scheduling soft reset in 700ms after answer [${detectedCode}] (Turn ${this.questionTurnCount + 1})`);
             this.scheduleSoftReset(700);
           }
         }
@@ -992,12 +1013,9 @@ export class GeminiLiveWebSocketClient {
         this._setModelSpeaking(false);
         if (this.state.lastCode !== "W") {
           this.currentUserTurnMessageId = null;
-          this.updateState({
-            statusMessage: "جاهز للسؤال التالي. تكلم الآن...",
-          });
           // Ensure soft reset is scheduled if it hasn't been already
           if (!this.softResetTimer && !this.isSoftResetting) {
-            wsTracer.log("SESSION", "Turn complete with real answer — scheduling soft reset fallback");
+            wsTracer.log("SESSION", `Turn complete with answer [${this.state.lastCode}] — scheduling fallback soft reset`);
             this.scheduleSoftReset(500);
           }
         }
@@ -1251,7 +1269,8 @@ export class GeminiLiveWebSocketClient {
   /** Clear Chat History */
   public clearChat() {
     this.currentUserTurnMessageId = null;
-    this.updateState({ messages: [] });
+    this.questionTurnCount = 0;
+    this.updateState({ lastCode: null, messages: [] });
   }
 }
 
