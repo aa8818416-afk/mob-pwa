@@ -237,15 +237,15 @@ export default function Home() {
         {/* Voice Command Quick Hints */}
         <div className="flex flex-wrap items-center justify-center gap-2 mb-4 text-[11px] text-slate-400">
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
-            <span className="font-mono text-cyan-400 font-bold">how start can</span>
+            <span className="font-mono text-cyan-400 font-bold">where start can</span>
             <span className="text-slate-300">بدء</span>
           </span>
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
-            <span className="font-mono text-rose-400 font-bold">how stop can</span>
+            <span className="font-mono text-rose-400 font-bold">where stop can</span>
             <span className="text-slate-300">إيقاف</span>
           </span>
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
-            <span className="font-mono text-amber-400 font-bold">how agian can</span>
+            <span className="font-mono text-amber-400 font-bold">where agian can</span>
             <span className="text-slate-300">إعادة السابقة</span>
           </span>
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">

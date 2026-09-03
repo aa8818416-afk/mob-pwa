@@ -92,11 +92,12 @@ export class StandbyWakeWordManager {
 
         const clean = transcript.toLowerCase().trim();
 
-        // Check for wake command: "how start can" or "how can start"
+        // Check for wake command: "where start can" or "where can start" (with fallback to how)
         const isStartCommand =
-          /\bhow\s+(start\s+can|can\s+start)\b/i.test(clean) ||
-          clean.includes("how start can") ||
-          clean.includes("how can start");
+          /\b(where|how)\s+(start\s+can|can\s+start)\b/i.test(clean) ||
+          clean.includes("where start can") ||
+          clean.includes("where can start") ||
+          clean.includes("how start can");
 
         if (isStartCommand) {
           this.stopListening();

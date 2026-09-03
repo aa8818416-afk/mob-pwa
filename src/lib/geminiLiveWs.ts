@@ -238,7 +238,7 @@ export class GeminiLiveWebSocketClient {
     isStreamingAudio: false,
     audioLevel: 0,
     lastCode: null,
-    statusMessage: "اضغط زر البداية أو قل how start can لبدء الاستماع الحي",
+    statusMessage: "اضغط زر البداية أو قل where start can لبدء الاستماع الحي",
     messages: [],
   };
 
@@ -278,9 +278,9 @@ export class GeminiLiveWebSocketClient {
     this.clearStandbyTimer();
     this.standbyTimer = setTimeout(() => {
       if (!this.state.isConnected && !this.state.isConnecting) {
-        wsTracer.log("WAKE", "Engaging Standby Wake Word Listener for 'how start can'...");
+        wsTracer.log("WAKE", "Engaging Standby Wake Word Listener for 'where start can'...");
         standbyWakeWordManager.startListening(async () => {
-          wsTracer.log("WAKE", "🎯 Wake command [how start can] heard in standby! Triggering START haptic & session...");
+          wsTracer.log("WAKE", "🎯 Wake command [where start can] heard in standby! Triggering START haptic & session...");
           hapticEngine.trigger("START");
           await this.startSession();
         });
@@ -419,24 +419,34 @@ export class GeminiLiveWebSocketClient {
   private checkVoiceCommands(text: string): boolean {
     const lower = text.toLowerCase().trim();
 
-    // 1. أمر التوقف الصوتي: "how stop can" أو "how can stop"
-    if (/\bhow\s+(stop\s+can|can\s+stop)\b/i.test(lower) || lower.includes("how stop can")) {
-      wsTracer.log("COMMAND", "🛑 Voice command detected: [how stop can] -> Stopping session immediately");
+    // 1. أمر التوقف الصوتي: "where stop can" أو "where can stop" (مع دعم how كاحتياطي)
+    const isStopCommand =
+      /\b(where|how)\s+(stop\s+can|can\s+stop)\b/i.test(lower) ||
+      lower.includes("where stop can") ||
+      lower.includes("where can stop") ||
+      lower.includes("how stop can");
+
+    if (isStopCommand) {
+      wsTracer.log("COMMAND", "🛑 Voice command detected: [where stop can] -> Stopping session immediately");
       this.addMessage({
         role: "system",
-        text: "🛑 تم التقاط أمر الإيقاف: [how stop can] — جاري إغلاق الجلسة...",
+        text: "🛑 تم التقاط أمر الإيقاف: [where stop can] — جاري إغلاق الجلسة...",
       });
       this.stopSession();
       return true;
     }
 
-    // 2. أمر إعادة الإجابة السابقة محلياً: "how agian can" أو "how again can"
-    if (
-      /\bhow\s+(agian\s+can|again\s+can|can\s+again)\b/i.test(lower) ||
+    // 2. أمر إعادة الإجابة السابقة محلياً: "where agian can" أو "where again can" أو "where can again"
+    const isRepeatCommand =
+      /\b(where|how)\s+(agian\s+can|again\s+can|can\s+again)\b/i.test(lower) ||
+      lower.includes("where agian can") ||
+      lower.includes("where again can") ||
+      lower.includes("where can again") ||
       lower.includes("how agian can") ||
-      lower.includes("how again can")
-    ) {
-      wsTracer.log("COMMAND", "🔄 Voice command detected: [how again can] -> Repeating previous definitive answer", this.lastDefinitiveAnswer);
+      lower.includes("how again can");
+
+    if (isRepeatCommand) {
+      wsTracer.log("COMMAND", "🔄 Voice command detected: [where again can] -> Repeating previous definitive answer", this.lastDefinitiveAnswer);
 
       if (this.lastDefinitiveAnswer) {
         hapticEngine.trigger(this.lastDefinitiveAnswer);
@@ -457,10 +467,16 @@ export class GeminiLiveWebSocketClient {
       return true;
     }
 
-    // 3. أمر البداية إذا تكرر أثناء عمل المايك بالفعل: "how start can"
-    // المستخدم طلب: "اذا تكررت اثناء فتح المايك فعلا لا يحدث اي شئ"
-    if (/\bhow\s+(start\s+can|can\s+start)\b/i.test(lower)) {
-      wsTracer.log("COMMAND", "ℹ️ Voice command [how start can] spoken while already active — ignored.");
+    // 3. أمر البداية إذا تكرر أثناء عمل المايك بالفعل: "where start can" أو "where can start"
+    // يتم تجاهلها تماماً حتى لا تؤثر على النموذج
+    const isStartCommand =
+      /\b(where|how)\s+(start\s+can|can\s+start)\b/i.test(lower) ||
+      lower.includes("where start can") ||
+      lower.includes("where can start") ||
+      lower.includes("how start can");
+
+    if (isStartCommand) {
+      wsTracer.log("COMMAND", "ℹ️ Voice command [where start can] spoken while already active — ignored.");
       return true;
     }
 
@@ -477,8 +493,8 @@ export class GeminiLiveWebSocketClient {
       return;
     }
 
-    // تصفية كلمة how start can إذا كانت مدمجة ببداية جملة
-    chunk = chunk.replace(/\bhow\s+(start\s+can|can\s+start)\b/gi, "").trim();
+    // تصفية كلمة البدء إذا كانت مدمجة ببداية جملة
+    chunk = chunk.replace(/\b(where|how)\s+(start\s+can|can\s+start)\b/gi, "").trim();
     if (!chunk) return;
 
     const messages = [...this.state.messages];
@@ -962,7 +978,7 @@ export class GeminiLiveWebSocketClient {
       isConnecting: false,
       isStreamingAudio: false,
       lastCode: null,
-      statusMessage: "تم إيقاف الجلسة. قل how start can أو اضغط للبدء.",
+      statusMessage: "تم إيقاف الجلسة. قل where start can أو اضغط للبدء.",
     });
 
     this.addMessage({ role: "system", text: "تم إغلاق الجلسة الحية." });
