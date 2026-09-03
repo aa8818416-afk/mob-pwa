@@ -1,5 +1,6 @@
 import { hapticEngine, AnswerCode } from "./vibration";
 import { wakeLockManager } from "./wakeLock";
+import { standbyWakeWordManager } from "./wakeWord";
 
 export interface ChatMessage {
   id: string;
@@ -155,37 +156,40 @@ function safeStringify(payload: unknown): string | null {
 const SYSTEM_INSTRUCTION = `
 You are an ultra-fast tactical AI assistant designed specifically for a deaf-blind user communicating via tactile haptic vibrations on a mobile smartphone.
 The user speaks in English. All spoken input, questions, options, and commands are in English.
-The user speaks a multiple-choice question (with four options) or a True/False question, or commands to repeat.
+The user speaks a multiple-choice question (with four candidate options) or a True/False question.
 
 ═══════════════════════════════════════════════════════════════════════════════
 CRITICAL DIRECTIVES WITH SYSTEM RATIONALES (READ CAREFULLY):
 ═══════════════════════════════════════════════════════════════════════════════
 
-1. PATIENCE & ALL 4 OPTIONS PREREQUISITE (RATIONALE & DIRECTIVE):
-- RATIONALE: In multiple-choice test environments, answering prematurely after hearing only 1, 2, or 3 options leads to severe errors and triggers the wrong vibration on the user's hand. The user requires all candidate choices evaluated.
-- DIRECTIVE: You MUST wait patiently until BOTH the complete question stem AND ALL FOUR OPTIONS (or the complete statement for True/False) have been stated.
-- NATURAL PAUSES ARE NOT END OF SPEECH: Natural pauses between the question stem and the options, or brief pauses between individual options, are normal speech breathing pauses. You MUST wait patiently for all 4 options.
-- WAITING CODE 'W': If prompted while options are still being dictated or during natural pauses, output 'W' (Waiting). NEVER guess or output '0' while options are in progress.
+1. MULTIPLE CHOICE DELIMITER 'THE' & MANDATORY 4-OPTIONS RULE:
+- RATIONALE: In multiple-choice test environments, answering prematurely after hearing only 1, 2, or 3 options leads to severe errors and triggers the wrong vibration on the user's hand. The user requires all four candidate choices evaluated.
+- CANDIDATE CHOICE DELIMITER 'THE': The speaker dictates the question stem first, followed by candidate choices sequentially, using the English word "the" as the prefix/delimiter before each candidate choice.
+- SEMANTIC CONTEXT & DISCRIMINATION:
+  * The question stem itself may contain grammatical articles like "the" (e.g., "What is the capital of...", "Which of the following...", "What is the speed...").
+  * You must use your semantic context intelligence to distinguish between "the" belonging to the question's grammatical structure vs. "the" introducing candidate choices.
+  * The candidate choices begin AFTER the question stem.
+  * The candidate choices are marked by 'the' introducing distinct choices:
+    - 1st candidate choice introduced by 'the' -> Option 1 (A)
+    - 2nd candidate choice introduced by 'the' -> Option 2 (B)
+    - 3rd candidate choice introduced by 'the' -> Option 3 (C)
+    - 4th candidate choice introduced by 'the' -> Option 4 (D)
+  * THE LAST 4 CHOICES RULE: If there are multiple occurrences of 'the' in the utterance, the core question is at the start, and the LAST FOUR distinct candidate items introduced by 'the' are the 4 options.
+  * NATURAL 'THE' IN PROPER NOUNS: If a candidate answer naturally starts with 'the' (e.g. "The Pacific Ocean", "The White House", "The Nile"), one single 'the' counts as both the delimiter and the name. The speaker will NOT say 'the the'.
+  * ALL 4 CHOICES PREREQUISITE: You MUST count and wait until ALL FOUR candidate options have been completely dictated.
+  * NATURAL PAUSES: Natural pauses between options (even 1 to 2 seconds) are normal breathing pauses.
+  * WAITING CODE 'W': If fewer than 4 candidate choices have been received so far, you MUST output 'W' (Waiting). NEVER guess an answer or output '0' while options are in progress.
 
-2. FLEXIBLE OPTIONS DETECTION — LABELED & UNLABELED / NATURAL PAUSES (RATIONALE & DIRECTIVE):
-- RATIONALE: The speaker will NOT always rigidly label options with letters like "Option A", "Option B", "Option C", "Option D". Frequently, the speaker dictates the question, pauses briefly, and then recites the four candidate choices sequentially with natural pauses or intonation shifts (e.g. "What is the capital of France? London... Paris... Rome... Madrid").
-- DIRECTIVE: You must recognize both styles with equal mastery:
-  * Style A (Explicit Labels): If the speaker uses letters or numbers ("A", "B", "C", "D" or "1", "2", "3", "4"), map each option directly.
-  * Style B (Implicit / Unlabeled Sequential Listing): If the speaker lists candidate answers separated by natural pauses, commas, or conversational rhythm without saying letters or numbers:
-    - 1st distinct candidate mentioned = Option 1 (A)
-    - 2nd distinct candidate mentioned = Option 2 (B)
-    - 3rd distinct candidate mentioned = Option 3 (C)
-    - 4th distinct candidate mentioned = Option 4 (D)
-- SEMANTIC INTELLIGENCE: Use your semantic boundary detection to deduce where each candidate answer begins and ends, even if spoken fluidly, fast, or if choices slightly overlap in delivery.
+2. TRUE / FALSE QUESTIONS:
+- RATIONALE: True/False questions do not have four options.
+- DIRECTIVE: If the speaker dictates a True/False question or a factual statement (e.g. "Paris is the capital of France, true or false?" or a direct statement), evaluate it immediately and output 'T' (True) or 'F' (False) without waiting for 4 options.
 
-3. MULTI-TALKER, SIDE-TALK & AMBIENT NOISE FILTERING (RATIONALE & DIRECTIVE):
-- RATIONALE: It is impossible to guarantee that the user is always alone in a soundproof room. Real-world audio contains background chatter, TV noise, family voices, or brief side comments by the speaker.
-- DIRECTIVE: Actively filter out and ignore any side talk, background chatter, or extraneous speech. Skillfully isolate ONLY the core test question and the four candidate answers.
-- IMMEDIATE TRIGGER WHEN COMPLETE: Do NOT wait for dead silence in the room. The moment you have identified the complete question and all four candidate answers, output the single answer character immediately without hesitation.
+3. MULTI-TALKER, SIDE-TALK & AMBIENT NOISE FILTERING:
+- Actively filter out background chatter, extraneous noise, or side talk. Skillfully isolate ONLY the core test question and the candidate answers.
+- IMMEDIATE TRIGGER WHEN COMPLETE: The moment you have identified the complete question and all 4 candidate options (or the full True/False statement), output the single answer character immediately without hesitation.
 
-4. STRICT ENGLISH SCRIPT & REPETITION COMMAND:
-- RATIONALE: The user speaks in English. Transcribe speech strictly in standard English Latin script (A-Z). Never transliterate or transcribe into Arabic script.
-- REPEAT: If the user says "repeat", "say again", "repeat the answer", or "one more time", immediately output the code of the previous question.
+4. STRICT ENGLISH SCRIPT:
+- Transcribe and evaluate speech strictly in standard English Latin script (A-Z). Never transcribe into Arabic script.
 
 5. OUTPUT RULES — STRICTLY 1 SINGLE ASCII CHARACTER:
 Output ONLY one single character and nothing else:
@@ -234,7 +238,7 @@ export class GeminiLiveWebSocketClient {
     isStreamingAudio: false,
     audioLevel: 0,
     lastCode: null,
-    statusMessage: "اضغط زر البداية لفتح الاتصال الحي والاستماع",
+    statusMessage: "اضغط زر البداية أو قل how start can لبدء الاستماع الحي",
     messages: [],
   };
 
@@ -255,10 +259,45 @@ export class GeminiLiveWebSocketClient {
   private cachedModelName: string = "";
   private questionTurnCount: number = 0;
 
+  // 🧠 Memory of last definitive answer for local replay ('1' | '2' | '3' | '4' | 'T' | 'F')
+  private lastDefinitiveAnswer: AnswerCode | null = null;
+
+  // 🎙️ Standby Wake Word Timer
+  private standbyTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor() {
     this.setupNetworkListeners();
     if (typeof window !== "undefined") {
       (window as unknown as { __geminiLiveClient: unknown }).__geminiLiveClient = this;
+    }
+  }
+
+  /** تفعيل الاستماع لكلمة البدء في وضع الانتظار */
+  public engageStandbyWakeWord(): void {
+    if (typeof window === "undefined" || !standbyWakeWordManager.isSupported()) return;
+    this.clearStandbyTimer();
+    this.standbyTimer = setTimeout(() => {
+      if (!this.state.isConnected && !this.state.isConnecting) {
+        wsTracer.log("WAKE", "Engaging Standby Wake Word Listener for 'how start can'...");
+        standbyWakeWordManager.startListening(async () => {
+          wsTracer.log("WAKE", "🎯 Wake command [how start can] heard in standby! Triggering START haptic & session...");
+          hapticEngine.trigger("START");
+          await this.startSession();
+        });
+      }
+    }, 700);
+  }
+
+  public initStandbyWakeWord(): void {
+    if (!this.state.isConnected && !this.state.isConnecting) {
+      this.engageStandbyWakeWord();
+    }
+  }
+
+  private clearStandbyTimer(): void {
+    if (this.standbyTimer) {
+      clearTimeout(this.standbyTimer);
+      this.standbyTimer = null;
     }
   }
 
@@ -376,9 +415,70 @@ export class GeminiLiveWebSocketClient {
     return clean;
   }
 
+  /** فحص وتنفيذ الأوامر الصوتية الخاصة للنظام */
+  private checkVoiceCommands(text: string): boolean {
+    const lower = text.toLowerCase().trim();
+
+    // 1. أمر التوقف الصوتي: "how stop can" أو "how can stop"
+    if (/\bhow\s+(stop\s+can|can\s+stop)\b/i.test(lower) || lower.includes("how stop can")) {
+      wsTracer.log("COMMAND", "🛑 Voice command detected: [how stop can] -> Stopping session immediately");
+      this.addMessage({
+        role: "system",
+        text: "🛑 تم التقاط أمر الإيقاف: [how stop can] — جاري إغلاق الجلسة...",
+      });
+      this.stopSession();
+      return true;
+    }
+
+    // 2. أمر إعادة الإجابة السابقة محلياً: "how agian can" أو "how again can"
+    if (
+      /\bhow\s+(agian\s+can|again\s+can|can\s+again)\b/i.test(lower) ||
+      lower.includes("how agian can") ||
+      lower.includes("how again can")
+    ) {
+      wsTracer.log("COMMAND", "🔄 Voice command detected: [how again can] -> Repeating previous definitive answer", this.lastDefinitiveAnswer);
+
+      if (this.lastDefinitiveAnswer) {
+        hapticEngine.trigger(this.lastDefinitiveAnswer);
+        this.addMessage({
+          role: "system",
+          text: `🔄 تم إعادة اهتزاز الإجابة السابقة محلياً من السيستم: [${this.lastDefinitiveAnswer}]`,
+        });
+      } else {
+        this.addMessage({
+          role: "system",
+          text: "⚠️ لا توجد إجابة سابقة مؤكدة لإعادتها بعد.",
+        });
+      }
+
+      // إلغاء الجولة الحالية وتصفير الذاكرة حتى لا يتعامل النموذج مع العبارة كسؤال
+      this.currentUserTurnMessageId = null;
+      this.softResetSessionForNextTurn();
+      return true;
+    }
+
+    // 3. أمر البداية إذا تكرر أثناء عمل المايك بالفعل: "how start can"
+    // المستخدم طلب: "اذا تكررت اثناء فتح المايك فعلا لا يحدث اي شئ"
+    if (/\bhow\s+(start\s+can|can\s+start)\b/i.test(lower)) {
+      wsTracer.log("COMMAND", "ℹ️ Voice command [how start can] spoken while already active — ignored.");
+      return true;
+    }
+
+    return false;
+  }
+
   /** تجميع مجزآت كلام المستخدم في رسالة واحدة متصلة لحظياً مثل تطبيق Gemini */
   private updateOrAppendUserMessage(rawChunk: string) {
-    const chunk = this.sanitizeAndNormalizeTranscript(rawChunk);
+    let chunk = this.sanitizeAndNormalizeTranscript(rawChunk);
+    if (!chunk) return;
+
+    // فحص إذا كان المقطع أمراً صوتياً مستقلاً
+    if (this.checkVoiceCommands(chunk)) {
+      return;
+    }
+
+    // تصفية كلمة how start can إذا كانت مدمجة ببداية جملة
+    chunk = chunk.replace(/\bhow\s+(start\s+can|can\s+start)\b/gi, "").trim();
     if (!chunk) return;
 
     const messages = [...this.state.messages];
@@ -418,6 +518,11 @@ export class GeminiLiveWebSocketClient {
         } else {
           newText = `${prevText} ${chunk}`;
         }
+      }
+
+      // فحص إذا أصبحت الجملة التراكمية تحوي أمراً صوتياً
+      if (this.checkVoiceCommands(newText)) {
+        return;
       }
 
       messages[existingIndex] = {
@@ -479,6 +584,8 @@ export class GeminiLiveWebSocketClient {
     if (this.state.isConnecting && !isAutoRetry) return true;
 
     this.clearReconnectTimer();
+    this.clearStandbyTimer();
+    standbyWakeWordManager.stopListening();
 
     if (!isAutoRetry) {
       this.isManualStop = false;
@@ -595,7 +702,7 @@ export class GeminiLiveWebSocketClient {
               startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
               endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
               prefixPaddingMs: 40,
-              silenceDurationMs: 1500,
+              silenceDurationMs: 2000,
             },
           },
           inputAudioTranscription: {},
@@ -855,10 +962,11 @@ export class GeminiLiveWebSocketClient {
       isConnecting: false,
       isStreamingAudio: false,
       lastCode: null,
-      statusMessage: "تم إيقاف الجلسة. اضغط للبدء من جديد.",
+      statusMessage: "تم إيقاف الجلسة. قل how start can أو اضغط للبدء.",
     });
 
     this.addMessage({ role: "system", text: "تم إغلاق الجلسة الحية." });
+    this.engageStandbyWakeWord();
   }
 
   /** Handle messages from Gemini Live server */
@@ -1000,6 +1108,7 @@ export class GeminiLiveWebSocketClient {
             });
           } else if (isDefinitiveAnswer) {
             // 🎯 Real answer detected (1, 2, 3, 4, T, F)!
+            this.lastDefinitiveAnswer = detectedCode;
             hapticEngine.trigger(detectedCode);
 
             // Close the current active user turn so the NEXT question starts a fresh bubble
@@ -1287,6 +1396,7 @@ export class GeminiLiveWebSocketClient {
   /** Clear Chat History */
   public clearChat() {
     this.currentUserTurnMessageId = null;
+    this.lastDefinitiveAnswer = null;
     this.questionTurnCount = 0;
     this.updateState({ lastCode: null, messages: [] });
   }
