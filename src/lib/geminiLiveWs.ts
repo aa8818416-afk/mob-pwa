@@ -10,6 +10,8 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+export type QuestionMode = "AUTO" | "TRUE_FALSE" | "MCQ";
+
 export interface LiveSessionState {
   isConnected: boolean;
   isConnecting: boolean;
@@ -18,6 +20,7 @@ export interface LiveSessionState {
   lastCode: AnswerCode | null;
   statusMessage: string;
   messages: ChatMessage[];
+  questionMode: QuestionMode;
 }
 
 // ═══════════════════════════════════════════
@@ -156,54 +159,78 @@ function safeStringify(payload: unknown): string | null {
 const SYSTEM_INSTRUCTION = `
 You are an ultra-fast tactical AI assistant designed specifically for a deaf-blind user communicating via tactile haptic vibrations on a mobile smartphone.
 The user speaks in English. All spoken input, questions, options, and commands are in English.
-The user speaks a multiple-choice question (with four candidate options) or a True/False question.
+The user receives output strictly as tactile physical vibrations (or mode confirmations) on the smartphone.
 
 ═══════════════════════════════════════════════════════════════════════════════
 CRITICAL DIRECTIVES WITH SYSTEM RATIONALES (READ CAREFULLY):
 ═══════════════════════════════════════════════════════════════════════════════
 
-1. MULTIPLE CHOICE DELIMITER 'THE' & MANDATORY 4-OPTIONS RULE:
-- RATIONALE: In multiple-choice test environments, answering prematurely after hearing only 1, 2, or 3 options leads to severe errors and triggers the wrong vibration on the user's hand. The user requires all four candidate choices evaluated.
-- CANDIDATE CHOICE DELIMITER 'THE': The speaker dictates the question stem first, followed by candidate choices sequentially, using the English word "the" as the prefix/delimiter before each candidate choice.
+1. SYSTEM PURPOSE & LATENCY PRINCIPLE:
+- RATIONALE: The user cannot see or hear model explanations. Every unnecessary word or incorrect character creates confusing, wrong physical vibrations on the user's hand. Speed and precision are paramount.
+- DIRECTIVE: Output ONLY the exact single character answer code ('1', '2', '3', '4', 'T', 'F', 'W', '0') or the exact mode acknowledgment token ('MODE:TF', 'MODE:MCQ'). Never output pleasantries, conversational speech, markdown, explanations, or quotes.
+
+2. DYNAMIC MODE SWITCHING ('MODE:TF' vs 'MODE:MCQ'):
+- RATIONALE: Exams often feature blocks of True/False questions followed by Multiple Choice questions. Explicit mode switching enables immediate, accurate answering without unnecessary option-waiting delays.
+- SWITCH TO TRUE/FALSE MODE:
+  * When the user dictates "True or false" (or "True and false", "T or F") as a mode instruction:
+  * You MUST output strictly: MODE:TF
+  * From this point forward, assume all subsequent utterances are True/False statements until switched.
+- SWITCH TO MULTIPLE CHOICE (MCQ) MODE:
+  * When the user dictates "the right answer", "correct", or "options" as a mode instruction:
+  * You MUST output strictly: MODE:MCQ
+  * From this point forward, expect multiple choice questions with candidate choices.
+
+3. CANDIDATE CHOICES & MULTIPLE CHOICE QUESTIONS (MCQ):
+- RATIONALE: When options are provided, answering prematurely after hearing only 1, 2, or 3 options triggers the wrong answer vibration. All candidate choices must be evaluated.
+- CANDIDATE CHOICE DELIMITER 'THE': The speaker introduces candidate choices sequentially using the English prefix "the" before each choice, or standard enumerations (e.g. "Option A", "Option 1", "A", "B", etc.).
 - SEMANTIC CONTEXT & DISCRIMINATION:
-  * The question stem itself may contain grammatical articles like "the" (e.g., "What is the capital of...", "Which of the following...", "What is the speed...").
-  * You must use your semantic context intelligence to distinguish between "the" belonging to the question's grammatical structure vs. "the" introducing candidate choices.
-  * The candidate choices begin AFTER the question stem.
-  * The candidate choices are marked by 'the' introducing distinct choices:
-    - 1st candidate choice introduced by 'the' -> Option 1 (A)
-    - 2nd candidate choice introduced by 'the' -> Option 2 (B)
-    - 3rd candidate choice introduced by 'the' -> Option 3 (C)
-    - 4th candidate choice introduced by 'the' -> Option 4 (D)
-  * THE LAST 4 CHOICES RULE: If there are multiple occurrences of 'the' in the utterance, the core question is at the start, and the LAST FOUR distinct candidate items introduced by 'the' are the 4 options.
+  * Distinguish between "the" belonging to the question's grammatical structure vs. "the" introducing candidate choices. The candidate choices begin AFTER the question stem.
+  * 1st candidate choice -> Option 1 (A)
+  * 2nd candidate choice -> Option 2 (B)
+  * 3rd candidate choice -> Option 3 (C)
+  * 4th candidate choice -> Option 4 (D)
   * NATURAL 'THE' IN PROPER NOUNS: If a candidate answer naturally starts with 'the' (e.g. "The Pacific Ocean", "The White House", "The Nile"), one single 'the' counts as both the delimiter and the name. The speaker will NOT say 'the the'.
-  * ALL 4 CHOICES PREREQUISITE: You MUST count and wait until ALL FOUR candidate options have been completely dictated.
-  * NATURAL PAUSES: Natural pauses between options (even 1 to 2 seconds) are normal breathing pauses.
-  * WAITING CODE 'W': If fewer than 4 candidate choices have been received so far, you MUST output 'W' (Waiting). NEVER guess an answer or output '0' while options are in progress.
+- WAITING CODE 'W': If the speaker is dictating an MCQ question and has begun stating candidate choices, but has NOT yet completed all candidate choices, output 'W' (Waiting). NEVER guess an answer or output '0' while choices are in progress.
 
-2. TRUE / FALSE QUESTIONS:
-- RATIONALE: True/False questions do not have four options.
-- DIRECTIVE: If the speaker dictates a True/False question or a factual statement (e.g. "Paris is the capital of France, true or false?" or a direct statement), evaluate it immediately and output 'T' (True) or 'F' (False) without waiting for 4 options.
+4. ABSENCE OF CHOICES = AUTOMATIC TRUE / FALSE EVALUATION:
+- RATIONALE: In oral tests and classroom settings, if a speaker recites a question or factual statement without reciting ANY candidate options (no "the" options, no A/B/C/D, no 1/2/3/4), it is logically a True/False question because no alternative choices exist to choose from! Waiting for 4 choices in this case causes silent stalling and failure.
+- DIRECTIVE:
+  * If the speaker recites a question or statement and DOES NOT provide candidate choices by any method:
+  * DO NOT wait for 4 options! DO NOT output 'W'!
+  * Use your semantic intelligence: evaluate the factual truth of the statement or question immediately.
+  * If True -> output 'T'.
+  * If False -> output 'F'.
+  * If the statement is completely incomplete (cut off mid-sentence without completing a thought) and no "done" is spoken, wait for the speaker to complete the sentence or say "done".
 
-3. MULTI-TALKER, SIDE-TALK & AMBIENT NOISE FILTERING:
-- Actively filter out background chatter, extraneous noise, or side talk. Skillfully isolate ONLY the core test question and the candidate answers.
-- IMMEDIATE TRIGGER WHEN COMPLETE: The moment you have identified the complete question and all 4 candidate options (or the full True/False statement), output the single answer character immediately without hesitation.
+5. STAND-ALONE "DONE" AS END-OF-INPUT TRIGGER:
+- RATIONALE: The user speaks the word "done" to eliminate silence latency and signal that dictation of the question and any options is 100% complete.
+- CONTEXTUAL DISCRIMINATION:
+  * STAND-ALONE CLOSING SIGNAL: If the word "done" appears at the end of the question or after the options without any further words spoken after it, it is a definitive CLOSING SIGNAL. Stop listening, evaluate all received text, and output the final answer code ('1', '2', '3', '4', 'T', or 'F') IMMEDIATELY without hesitation.
+  * GRAMMATICAL / IN-SENTENCE "DONE": If "done" is part of the grammatical sentence structure (e.g. "Has the work been done?", "The experiment was done by Newton", "well done"), or if the speaker continues dictating additional words after "done", treat it as a standard word within the question text and do NOT treat it as a closing signal.
 
-4. STRICT ENGLISH SCRIPT:
+6. MULTI-TALKER, SIDE-TALK & AMBIENT NOISE FILTERING:
+- Actively filter out background chatter, room noise, and side talk. Skillfully isolate ONLY the core test question and the candidate answers.
+- IMMEDIATE TRIGGER WHEN COMPLETE: The moment you have identified the complete question and candidate options (or the True/False statement), output the single answer character immediately.
+- UNCLEAR / NOISE CODE '0': Output '0' ONLY if speech is completely over but entirely unintelligible, inaudible, or pure background noise.
+
+7. STRICT ENGLISH SCRIPT:
 - Transcribe and evaluate speech strictly in standard English Latin script (A-Z). Never transcribe into Arabic script.
 
-5. OUTPUT RULES — STRICTLY 1 SINGLE ASCII CHARACTER:
-Output ONLY one single character and nothing else:
-- '1' : If the correct answer is Option 1 / First candidate / (A) / (1).
-- '2' : If the correct answer is Option 2 / Second candidate / (B) / (2).
-- '3' : If the correct answer is Option 3 / Third candidate / (C) / (3).
-- '4' : If the correct answer is Option 4 / Fourth candidate / (D) / (4).
+8. OUTPUT RULES — STRICTLY 1 SINGLE ASCII CHARACTER OR MODE TOKEN:
+Output ONLY one of the following tokens and NOTHING else:
+- '1' : Correct answer is Option 1 / First candidate / (A) / (1).
+- '2' : Correct answer is Option 2 / Second candidate / (B) / (2).
+- '3' : Correct answer is Option 3 / Third candidate / (C) / (3).
+- '4' : Correct answer is Option 4 / Fourth candidate / (D) / (4).
 - 'T' : If the statement is True.
 - 'F' : If the statement is False.
-- 'W' : If the question or options are still in progress / waiting for all 4 options.
+- 'W' : If candidate choices have begun but are still in progress / waiting for remaining options.
 - '0' : ONLY if speech is completely over but entirely unintelligible, inaudible, or pure background noise.
+- 'MODE:TF'  : Acknowledged switch to True/False mode.
+- 'MODE:MCQ' : Acknowledged switch to Multiple Choice mode.
 
 Rules:
-1. NEVER output words, markdown, punctuation, explanations, or quotes. ONLY the single character.
+1. NEVER output words, markdown, punctuation, explanations, or quotes. ONLY the single character or mode token.
 `;
 
 export class GeminiLiveWebSocketClient {
@@ -232,6 +259,9 @@ export class GeminiLiveWebSocketClient {
   private playbackContext: AudioContext | null = null;
   private nextPlayTime: number = 0;
 
+  // 🎯 Question Mode Engine (AUTO | TRUE_FALSE | MCQ)
+  private currentQuestionMode: QuestionMode = "AUTO";
+
   private state: LiveSessionState = {
     isConnected: false,
     isConnecting: false,
@@ -240,6 +270,7 @@ export class GeminiLiveWebSocketClient {
     lastCode: null,
     statusMessage: "اضغط زر البداية أو قل where start can لبدء الاستماع الحي",
     messages: [],
+    questionMode: "AUTO",
   };
 
   // 🔄 Auto-Reconnect Engine
@@ -973,12 +1004,15 @@ export class GeminiLiveWebSocketClient {
     wakeLockManager.releaseWakeLock();
     hapticEngine.trigger("STOP");
 
+    this.currentQuestionMode = "AUTO";
+
     this.updateState({
       isConnected: false,
       isConnecting: false,
       isStreamingAudio: false,
       lastCode: null,
       statusMessage: "تم إيقاف الجلسة. قل where start can أو اضغط للبدء.",
+      questionMode: "AUTO",
     });
 
     this.addMessage({ role: "system", text: "تم إغلاق الجلسة الحية." });
@@ -1011,7 +1045,16 @@ export class GeminiLiveWebSocketClient {
           });
         }
 
-        // 🔒 LANGUAGE ANCHOR CONTEXT SEEDING (تثبيت لغة الاستماع على الإنجليزية حصراً لمنع الكتابة بالعربي)
+        // 🔒 LANGUAGE & MODE ANCHOR CONTEXT SEEDING (تثبيت لغة الاستماع ونمط الأسئلة الحالي عبر الجلسات)
+        let modeHint = "";
+        if (this.currentQuestionMode === "TRUE_FALSE") {
+          modeHint = " Active Question Mode: TRUE/FALSE. All upcoming questions are True/False statements until switched. Evaluate statements immediately as T or F without waiting for candidate options.";
+        } else if (this.currentQuestionMode === "MCQ") {
+          modeHint = " Active Question Mode: MULTIPLE CHOICE. Expect questions with candidate choices.";
+        } else {
+          modeHint = " Active Question Mode: AUTO. If candidate choices are provided, treat as Multiple Choice. If no choices are provided, evaluate as True/False.";
+        }
+
         const languageAnchorPayload = {
           clientContent: {
             turns: [
@@ -1019,7 +1062,7 @@ export class GeminiLiveWebSocketClient {
                 role: "user",
                 parts: [
                   {
-                    text: "Language Lock: All questions and multiple-choice options in this conversation are strictly in English. Transcribe speech strictly in standard English Latin alphabet.",
+                    text: `Language & Mode Lock: All questions and multiple-choice options in this conversation are strictly in English. Transcribe speech strictly in standard English Latin alphabet.${modeHint}`,
                   },
                 ],
               },
@@ -1027,7 +1070,7 @@ export class GeminiLiveWebSocketClient {
                 role: "model",
                 parts: [
                   {
-                    text: "Understood. Speech recognition is locked to English Latin text.",
+                    text: `Understood. Speech recognition is locked to English Latin text.${modeHint}`,
                   },
                 ],
               },
@@ -1035,7 +1078,7 @@ export class GeminiLiveWebSocketClient {
             turnComplete: false,
           },
         };
-        wsTracer.log("SETUP", "Sending English Language Anchor turn to lock STT into English");
+        wsTracer.log("SETUP", "Sending English Language & Mode Anchor turn to lock STT into English and active mode", { mode: this.currentQuestionMode });
         this.sendPayload("LANG_ANCHOR", languageAnchorPayload);
 
         // Only start mic if this is NOT a soft reset (mic is already streaming during soft reset)
@@ -1092,11 +1135,54 @@ export class GeminiLiveWebSocketClient {
           const detectedCode = this.extractAnswerCode(modelText);
           wsTracer.log("ANSWER", `Detected code: [${detectedCode}] from "${modelText}"`);
 
+          // 1. Mode Switching confirmations from Model
+          if (detectedCode === "MODE_TF") {
+            wsTracer.log("MODE", "🎯 Model acknowledged switch to True/False mode");
+            this.currentQuestionMode = "TRUE_FALSE";
+            this.currentUserTurnMessageId = null;
+            hapticEngine.trigger("T");
+
+            this.updateState({
+              questionMode: "TRUE_FALSE",
+              statusMessage: "🎯 تم تفعيل نمط: صح وخطأ (True / False)",
+            });
+
+            this.addMessage({
+              role: "model",
+              text: "🎯 تم تفعيل نمط أسئلة (صح وخطأ) لجميع الأسئلة القادمة.",
+            });
+
+            // Clean reset to prime new session in True/False mode
+            this.scheduleSoftReset(700);
+            return;
+          }
+
+          if (detectedCode === "MODE_MCQ") {
+            wsTracer.log("MODE", "🎯 Model acknowledged switch to Multiple Choice (MCQ) mode");
+            this.currentQuestionMode = "MCQ";
+            this.currentUserTurnMessageId = null;
+            hapticEngine.trigger("START");
+
+            this.updateState({
+              questionMode: "MCQ",
+              statusMessage: "🎯 تم تفعيل نمط: خيارات متعددة (MCQ)",
+            });
+
+            this.addMessage({
+              role: "model",
+              text: "🎯 تم تفعيل نمط أسئلة (الخيارات المتعددة) لجميع الأسئلة القادمة.",
+            });
+
+            // Clean reset to prime new session in MCQ mode
+            this.scheduleSoftReset(700);
+            return;
+          }
+
           const isDefinitiveAnswer = ["1", "2", "3", "4", "T", "F"].includes(detectedCode);
 
           if (detectedCode === "W") {
             // Model signaled waiting for remaining options — do NOT reset!
-            wsTracer.log("ANSWER", "Model signaled WAIT ('W') — waiting for user to complete question and all 4 options (no reset)");
+            wsTracer.log("ANSWER", "Model signaled WAIT ('W') — waiting for user to complete question and options (no reset)");
             hapticEngine.trigger("W");
 
             this.updateState({
@@ -1109,19 +1195,28 @@ export class GeminiLiveWebSocketClient {
               code: "W",
             });
           } else if (detectedCode === "0") {
-            // Model signaled unclear / background noise — do NOT reset! User can repeat in same turn
-            wsTracer.log("ANSWER", "Model signaled UNCLEAR / NOISE ('0') — alerting user to repeat question (no reset)");
+            // Model signaled unclear / background noise — Reset session cleanly so user's retry starts with 100% clean context!
+            wsTracer.log("ANSWER", "Model signaled UNCLEAR / NOISE ('0') — triggering '0' haptic and scheduling soft reset to clean memory");
+            this.lastDefinitiveAnswer = "0";
             hapticEngine.trigger("0");
 
+            // Close the current active user turn so the NEXT question starts a fresh bubble
+            this.currentUserTurnMessageId = null;
+
             this.updateState({
-              statusMessage: "الكلام غير واضح أو ضوضاء. يرجى تكرار السؤال...",
+              lastCode: "0",
+              statusMessage: "الكلام غير واضح أو ضوضاء [0] — تم تصفير الذاكرة، أعد السؤال الآن...",
             });
 
             this.addMessage({
               role: "model",
-              text: "غير مفهوم أو ضوضاء. يرجى تكرار السؤال...",
+              text: "غير مفهوم أو ضوضاء [0]. تم تجديد الجلسة، يرجى تكرار السؤال...",
               code: "0",
             });
+
+            // 🔄 Schedule soft reset immediately to purge unclear context
+            wsTracer.log("SESSION", `Scheduling soft reset in 800ms after '0' signal to clean memory context (Turn ${this.questionTurnCount + 1})`);
+            this.scheduleSoftReset(800);
           } else if (isDefinitiveAnswer) {
             // 🎯 Real answer detected (1, 2, 3, 4, T, F)!
             this.lastDefinitiveAnswer = detectedCode;
@@ -1153,12 +1248,12 @@ export class GeminiLiveWebSocketClient {
         wsTracer.log("PROTO", "Turn complete");
         // Model finished speaking — re-enable mic sensitivity
         this._setModelSpeaking(false);
-        // Only schedule fallback reset if there is an actual definitive answer (1, 2, 3, 4, T, F)
-        const hasDefinitiveAnswer = this.state.lastCode && ["1", "2", "3", "4", "T", "F"].includes(this.state.lastCode);
+        // Only schedule fallback reset if there is an actual definitive answer or '0'
+        const hasDefinitiveAnswer = this.state.lastCode && ["1", "2", "3", "4", "T", "F", "0"].includes(this.state.lastCode);
         if (hasDefinitiveAnswer) {
           this.currentUserTurnMessageId = null;
           if (!this.softResetTimer && !this.isSoftResetting) {
-            wsTracer.log("SESSION", `Turn complete with definitive answer [${this.state.lastCode}] — scheduling fallback soft reset`);
+            wsTracer.log("SESSION", `Turn complete with definitive answer or [0] [${this.state.lastCode}] — scheduling fallback soft reset`);
             this.scheduleSoftReset(500);
           }
         }
@@ -1172,9 +1267,18 @@ export class GeminiLiveWebSocketClient {
     }
   }
 
-  /** Extract single answer code from model spoken text */
-  private extractAnswerCode(text: string): AnswerCode {
+  /** Extract single answer code or mode command from model spoken text */
+  private extractAnswerCode(text: string): AnswerCode | "MODE_TF" | "MODE_MCQ" {
     const upper = text.toUpperCase().trim();
+
+    // 1. Detect Mode Switch acknowledgment tokens
+    if (upper.includes("MODE:TF") || upper.includes("MODE_TF") || upper.includes("[MODE:TF]")) {
+      return "MODE_TF";
+    }
+    if (upper.includes("MODE:MCQ") || upper.includes("MODE_MCQ") || upper.includes("[MODE:MCQ]")) {
+      return "MODE_MCQ";
+    }
+
     const match = upper.match(/^[1234TFW0]$/);
     if (match) return match[0] as AnswerCode;
 
@@ -1414,7 +1518,8 @@ export class GeminiLiveWebSocketClient {
     this.currentUserTurnMessageId = null;
     this.lastDefinitiveAnswer = null;
     this.questionTurnCount = 0;
-    this.updateState({ lastCode: null, messages: [] });
+    this.currentQuestionMode = "AUTO";
+    this.updateState({ lastCode: null, messages: [], questionMode: "AUTO" });
   }
 }
 

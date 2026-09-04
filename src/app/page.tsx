@@ -40,6 +40,7 @@ export default function Home() {
     lastCode: null,
     statusMessage: "اضغط زر البداية في المنتصف لفتح الاتصال الحي والاستماع",
     messages: [],
+    questionMode: "AUTO",
   });
 
   const [isVibrating, setIsVibrating] = useState<boolean>(false);
@@ -212,21 +213,46 @@ export default function Home() {
 
         {/* Current State / Feedback Display */}
         <div className="text-center mb-6 w-full">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-900/90 border border-slate-800 text-slate-300 text-sm mb-3">
-            <span
-              className={`w-2.5 h-2.5 rounded-full ${
-                sessionState.isConnected
-                  ? "bg-emerald-400 animate-ping"
-                  : sessionState.isConnecting
-                  ? "bg-amber-400 animate-pulse"
-                  : "bg-slate-500"
-              }`}
-            />
-            {sessionState.isConnected
-              ? "الاتصال الحي مفتوح • المايكروفون يستمع"
-              : sessionState.isConnecting
-              ? "جاري فتح اتصال الويب سوكت..."
-              : "غير متصل (اضغط للبدء)"}
+          <div className="flex flex-wrap items-center justify-center gap-2 mb-3">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-900/90 border border-slate-800 text-slate-300 text-sm">
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${
+                  sessionState.isConnected
+                    ? "bg-emerald-400 animate-ping"
+                    : sessionState.isConnecting
+                    ? "bg-amber-400 animate-pulse"
+                    : "bg-slate-500"
+                }`}
+              />
+              {sessionState.isConnected
+                ? "الاتصال الحي مفتوح • المايك يستمع"
+                : sessionState.isConnecting
+                ? "جاري فتح اتصال الويب سوكت..."
+                : "غير متصل (اضغط للبدء)"}
+            </div>
+
+            {/* Question Mode Badge */}
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/80 border border-slate-800 text-xs text-slate-300 shadow-sm">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  sessionState.questionMode === "TRUE_FALSE"
+                    ? "bg-amber-400"
+                    : sessionState.questionMode === "MCQ"
+                    ? "bg-cyan-400"
+                    : "bg-emerald-400"
+                }`}
+              />
+              <span>
+                النمط:{" "}
+                <strong className="text-white">
+                  {sessionState.questionMode === "TRUE_FALSE"
+                    ? "صح وخطأ (T/F)"
+                    : sessionState.questionMode === "MCQ"
+                    ? "خيارات (MCQ)"
+                    : "ذكي تلقائي (Auto)"}
+                </strong>
+              </span>
+            </div>
           </div>
 
           <p className="text-base sm:text-lg font-medium text-slate-200 px-4">
@@ -235,7 +261,7 @@ export default function Home() {
         </div>
 
         {/* Voice Command Quick Hints */}
-        <div className="flex flex-wrap items-center justify-center gap-2 mb-4 text-[11px] text-slate-400">
+        <div className="flex flex-wrap items-center justify-center gap-1.5 mb-4 text-[11px] text-slate-400 max-w-md">
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
             <span className="font-mono text-cyan-400 font-bold">where start can</span>
             <span className="text-slate-300">بدء</span>
@@ -245,8 +271,16 @@ export default function Home() {
             <span className="text-slate-300">إيقاف</span>
           </span>
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
-            <span className="font-mono text-amber-400 font-bold">where agian can</span>
-            <span className="text-slate-300">إعادة السابقة</span>
+            <span className="font-mono text-emerald-400 font-bold">done</span>
+            <span className="text-slate-300">إنهاء السؤال فوراً</span>
+          </span>
+          <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
+            <span className="font-mono text-amber-400 font-bold">True or false</span>
+            <span className="text-slate-300">نمط صح/خطأ</span>
+          </span>
+          <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
+            <span className="font-mono text-sky-400 font-bold">correct</span>
+            <span className="text-slate-300">نمط خيارات</span>
           </span>
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
             <span className="font-mono text-purple-400 font-bold">the</span>
