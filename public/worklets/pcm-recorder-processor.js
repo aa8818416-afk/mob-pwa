@@ -11,9 +11,11 @@
  *  - Convert Float32 → Int16 Linear PCM.
  *  - Batch samples into 128ms chunks (2 048 samples @ 16kHz) before posting.
  *  - Compute RMS energy and post it for the UI visualiser (no DOM access needed).
- *  - Support a dynamic squelch gate (Acoustic Echo Ducking):
- *      When the model is speaking, raise the silence floor so its own
- *      speaker output does not falsely trigger voice-activity detection.
+ *  - Pre-Roll Circular Buffer & Barge-In Engine:
+ *      When the model is speaking, keep the last ~384ms of audio in a circular
+ *      buffer. If user voice energy breaks through (Barge-in), immediately flush
+ *      the pre-roll frames so the first syllable ("Wait", "Question", etc.)
+ *      is never clipped!
  *
  * Incoming port messages (from main thread → worklet):
  *   { type: "SET_MODEL_SPEAKING", value: boolean }
@@ -21,10 +23,12 @@
  * Outgoing port messages (worklet → main thread):
  *   { type: "PCM_CHUNK",  buffer: Int16Array (Transferable) }
  *   { type: "VOLUME",     rms: number (0-1),  energy: number (0-1) }
+ *   { type: "BARGE_IN" }
  */
 
 const TARGET_SAMPLE_RATE = 16000;
 const CHUNK_SIZE_SAMPLES = 2048; // 128ms @ 16kHz
+const PRE_ROLL_MAX_CHUNKS = 3;   // ~384ms audio memory for barge-in preservation
 
 class PCMRecorderProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -39,9 +43,10 @@ class PCMRecorderProcessor extends AudioWorkletProcessor {
     this._resampleRatio = this._inputSampleRate / TARGET_SAMPLE_RATE;
     this._fractionalPos = 0; // fractional position in input stream
 
-    // Echo ducking state
+    // Echo ducking & Pre-roll state
     this._isModelSpeaking = false;
-    this._squelchThreshold = 0.01; // RMS floor below which we suppress audio during model speech
+    this._bargeInThreshold = 0.07; // RMS threshold where human voice interrupts speaker bleed
+    this._preRollBuffer = [];      // Circular buffer holding Int16Array chunks
 
     // Volume smoothing
     this._smoothedRms = 0;
@@ -49,6 +54,9 @@ class PCMRecorderProcessor extends AudioWorkletProcessor {
     this.port.onmessage = (event) => {
       if (event.data?.type === "SET_MODEL_SPEAKING") {
         this._isModelSpeaking = event.data.value;
+        if (!this._isModelSpeaking) {
+          this._preRollBuffer = [];
+        }
       }
     };
   }
@@ -101,13 +109,6 @@ class PCMRecorderProcessor extends AudioWorkletProcessor {
 
     this.port.postMessage({ type: "VOLUME", rms: this._smoothedRms, energy });
 
-    // ── Acoustic Echo Ducking ──────────────────────────────────────────
-    // When the model is speaking, suppress mic input below the squelch floor.
-    if (this._isModelSpeaking && rms < this._squelchThreshold) {
-      // Discard this quantum — it's likely speaker bleed, not user voice
-      return true;
-    }
-
     // ── Resample to 16kHz ─────────────────────────────────────────────
     const resampled = this._resampleChunk(rawSamples);
 
@@ -123,14 +124,45 @@ class PCMRecorderProcessor extends AudioWorkletProcessor {
           pcm16[j] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
 
-        // ── Post to main thread as Transferable ────────────────────
-        this.port.postMessage(
-          { type: "PCM_CHUNK", buffer: pcm16.buffer },
-          [pcm16.buffer]  // transfer ownership — zero-copy
-        );
-
         // Reset accumulation
         this._bufferFill = 0;
+
+        // ── Check Model Speaking / Barge-In Logic ─────────────────
+        if (this._isModelSpeaking) {
+          // If speaker output is active, check if user's microphone RMS breaks through
+          if (this._smoothedRms >= this._bargeInThreshold) {
+            // User interrupted the model!
+            this.port.postMessage({ type: "BARGE_IN" });
+
+            // Flush all pre-roll frames immediately so first syllable is intact
+            while (this._preRollBuffer.length > 0) {
+              const preChunk = this._preRollBuffer.shift();
+              this.port.postMessage(
+                { type: "PCM_CHUNK", buffer: preChunk.buffer },
+                [preChunk.buffer]
+              );
+            }
+
+            // Post current chunk
+            this.port.postMessage(
+              { type: "PCM_CHUNK", buffer: pcm16.buffer },
+              [pcm16.buffer]
+            );
+          } else {
+            // Low volume (speaker bleed) — save in circular pre-roll buffer
+            this._preRollBuffer.push(pcm16);
+            if (this._preRollBuffer.length > PRE_ROLL_MAX_CHUNKS) {
+              this._preRollBuffer.shift();
+            }
+          }
+        } else {
+          // Model is silent: stream audio immediately without delay
+          this._preRollBuffer = [];
+          this.port.postMessage(
+            { type: "PCM_CHUNK", buffer: pcm16.buffer },
+            [pcm16.buffer] // transfer ownership — zero-copy
+          );
+        }
       }
     }
 

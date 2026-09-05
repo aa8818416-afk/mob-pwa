@@ -41,6 +41,8 @@ export default function Home() {
     statusMessage: "اضغط زر البداية في المنتصف لفتح الاتصال الحي والاستماع",
     messages: [],
     questionMode: "AUTO",
+    voiceName: "Aoede",
+    thinkingBudget: 2000,
   });
 
   const [isVibrating, setIsVibrating] = useState<boolean>(false);
@@ -453,6 +455,9 @@ export default function Home() {
                     {/* Content Text */}
                     <p className="text-xs sm:text-sm leading-relaxed font-medium select-text break-words" dir="auto">
                       {msg.text}
+                      {isLatestUser && (
+                        <span className="inline-block w-1.5 h-3.5 bg-cyan-400 align-middle mr-1.5 animate-pulse rounded-sm" />
+                      )}
                     </p>
 
                     {/* Model Answer Code Badge & Vibration Replay */}
@@ -491,7 +496,7 @@ export default function Home() {
             <div className="flex items-center justify-between border-b border-slate-800 pb-2">
               <h3 className="text-xs font-bold text-slate-200 flex items-center gap-2">
                 <Sliders className="w-4 h-4 text-cyan-400" />
-                إعدادات وسرعة الهزاز
+                إعدادات الصوت والتحليل وسرعة الهزاز
               </h3>
               <span className="text-xs text-slate-400">سرعة: {vibrationSpeed}x</span>
             </div>
@@ -518,6 +523,60 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Voice Selection */}
+            <div>
+              <label className="text-xs text-slate-400 block mb-2">صوت النموذج (Gemini Voice)</label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { name: "Aoede", desc: "هادئ وواضح" },
+                  { name: "Kore", desc: "طبيعي ودافئ" },
+                  { name: "Puck", desc: "متحمس ونشط" },
+                  { name: "Zephyr", desc: "سريع ومتوازن" },
+                ].map((v) => (
+                  <button
+                    key={v.name}
+                    onClick={() => geminiLiveWs.setVoiceName(v.name)}
+                    className={`py-2 px-2 text-xs rounded-xl border transition-all font-medium flex flex-col items-center gap-0.5 ${
+                      sessionState.voiceName === v.name
+                        ? "bg-cyan-500/20 border-cyan-500 text-cyan-300 font-bold"
+                        : "bg-slate-800/60 border-slate-700/60 text-slate-400 hover:bg-slate-800"
+                    }`}
+                  >
+                    <span>{v.name}</span>
+                    <span className="text-[10px] text-slate-500 font-normal">{v.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Thinking Budget (سرعة وميزانية التفكير) */}
+            <div>
+              <label className="text-xs text-slate-400 block mb-2">ميزانية التفكير ودقة التحليل (Thinking Budget)</label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {[
+                  { val: 2000, label: "2000 (دقيق وموصى به)" },
+                  { val: "dynamic", label: "Dynamic (تفكير ذكي)" },
+                  { val: 1000, label: "1000 (متوازن)" },
+                  { val: 0, label: "0 (فوري مكالمات)" },
+                ].map((b) => (
+                  <button
+                    key={String(b.val)}
+                    onClick={() => geminiLiveWs.setThinkingBudget(b.val as number | "dynamic")}
+                    className={`py-2 px-2 text-xs rounded-xl border transition-all font-medium ${
+                      sessionState.thinkingBudget === b.val
+                        ? "bg-emerald-500/20 border-emerald-500 text-emerald-300 font-bold"
+                        : "bg-slate-800/60 border-slate-700/60 text-slate-400 hover:bg-slate-800"
+                    }`}
+                  >
+                    {b.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-slate-500 mt-1">
+                💡 القيمة 2000 أو Dynamic تمنح النموذج ميزانية كافية للتفكير العميق وتجنب التخمين السريع، لضمان صحة الإجابة.
+              </p>
             </div>
           </div>
         )}

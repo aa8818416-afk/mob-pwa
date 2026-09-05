@@ -21,6 +21,8 @@ export interface LiveSessionState {
   statusMessage: string;
   messages: ChatMessage[];
   questionMode: QuestionMode;
+  voiceName: string;
+  thinkingBudget: number | "dynamic";
 }
 
 // ═══════════════════════════════════════════
@@ -258,6 +260,11 @@ export class GeminiLiveWebSocketClient {
   // Audio playback for model responses (24kHz PCM)
   private playbackContext: AudioContext | null = null;
   private nextPlayTime: number = 0;
+  private activeAudioSources: AudioBufferSourceNode[] = [];
+
+  // 🔊 Voice and Thinking Configuration
+  private selectedVoice: string = "Aoede";
+  private selectedThinkingBudget: number | "dynamic" = 2000;
 
   // 🎯 Question Mode Engine (AUTO | TRUE_FALSE | MCQ)
   private currentQuestionMode: QuestionMode = "AUTO";
@@ -271,6 +278,8 @@ export class GeminiLiveWebSocketClient {
     statusMessage: "اضغط زر البداية أو قل where start can لبدء الاستماع الحي",
     messages: [],
     questionMode: "AUTO",
+    voiceName: "Aoede",
+    thinkingBudget: 2000,
   };
 
   // 🔄 Auto-Reconnect Engine
@@ -301,6 +310,38 @@ export class GeminiLiveWebSocketClient {
     if (typeof window !== "undefined") {
       (window as unknown as { __geminiLiveClient: unknown }).__geminiLiveClient = this;
     }
+  }
+
+  /** ضبط صوت النموذج (Aoede, Kore, Puck, Zephyr) */
+  public setVoiceName(voice: string): void {
+    this.selectedVoice = voice;
+    this.updateState({ voiceName: voice });
+    wsTracer.log("CONFIG", `Voice changed to: ${voice}`);
+  }
+
+  /** ضبط ميزانية وسرعة التفكير (dynamic أو 2000 أو أي رقم) */
+  public setThinkingBudget(budget: number | "dynamic"): void {
+    this.selectedThinkingBudget = budget;
+    this.updateState({ thinkingBudget: budget });
+    wsTracer.log("CONFIG", `Thinking budget changed to: ${budget}`);
+  }
+
+  /** ⚡ إيقاف فوري لكافة مصادر الصوت النشطة وتفريغ البافر عند المقاطعة (Barge-in) */
+  public stopAllBufferedAudio(): void {
+    if (this.activeAudioSources.length > 0) {
+      wsTracer.log("AUDIO", `Stopping ${this.activeAudioSources.length} active audio sources immediately`);
+      for (const src of this.activeAudioSources) {
+        try {
+          src.stop();
+          src.disconnect();
+        } catch (_) {}
+      }
+      this.activeAudioSources = [];
+    }
+    if (this.playbackContext) {
+      this.nextPlayTime = this.playbackContext.currentTime;
+    }
+    this._setModelSpeaking(false);
   }
 
   /** تفعيل الاستماع لكلمة البدء في وضع الانتظار */
@@ -696,14 +737,14 @@ export class GeminiLiveWebSocketClient {
    * 🔌 Establish WebSocket Connection (Used for initial session, auto-reconnect, and seamless soft-reset)
    */
   private connectWebSocket(apiKey: string, modelName: string, isSoftReset: boolean) {
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
     wsTracer.log("WS", isSoftReset ? "🔄 Opening fresh WebSocket connection for next question (Soft Reset)..." : "Opening WebSocket connection...");
     
     this.ws = new WebSocket(wsUrl);
     this.ws.binaryType = "arraybuffer";
 
     this.ws.onopen = () => {
-      wsTracer.log("WS", isSoftReset ? "✅ Connected for next question (fresh 0-token memory)" : "✅ Connected to Gemini Live");
+      wsTracer.log("WS", isSoftReset ? "✅ Connected for next question (fresh 0-token memory)" : "✅ Connected to Gemini Live (v1beta)");
 
       this.isSetupComplete = false;
       this.audioChunksSent = 0;
@@ -728,27 +769,38 @@ export class GeminiLiveWebSocketClient {
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // ✅ SETUP PAYLOAD
+      // ✅ SETUP PAYLOAD (v1beta with thinkingConfig & configurable voice)
       // ═══════════════════════════════════════════════════════════════
+      const generationConfig: Record<string, unknown> = {
+        responseModalities: ["AUDIO"],
+        temperature: 0.1,
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: this.selectedVoice,
+            },
+          },
+        },
+      };
+
+      if (this.selectedThinkingBudget !== "dynamic") {
+        generationConfig.thinkingConfig = {
+          thinkingBudget: typeof this.selectedThinkingBudget === "number"
+            ? this.selectedThinkingBudget
+            : parseInt(String(this.selectedThinkingBudget), 10),
+        };
+      }
+
       const setupPayload = {
         setup: {
           model: modelName,
-          generationConfig: {
-            responseModalities: ["AUDIO"],
-            temperature: 0.1,
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: "Aoede",
-                },
-              },
-            },
-          },
+          generationConfig,
           realtimeInputConfig: {
             automaticActivityDetection: {
+              disabled: false,
               startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
               endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
-              prefixPaddingMs: 40,
+              prefixPaddingMs: 300,
               silenceDurationMs: 2000,
             },
           },
@@ -1102,6 +1154,24 @@ export class GeminiLiveWebSocketClient {
         });
       }
 
+      // ⚡ Interrupted by server (barge-in triggered by user speaking while model is speaking)
+      if (response.serverContent?.interrupted) {
+        wsTracer.log("BARGE_IN", "⚡ Server interrupted event (Barge-in) — stopping model playback immediately");
+        this.stopAllBufferedAudio();
+        this.currentUserTurnMessageId = null;
+
+        const messages = [...this.state.messages];
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === "model") {
+            if (!messages[i].text.endsWith("...")) {
+              messages[i] = { ...messages[i], text: messages[i].text + "..." };
+              this.updateState({ messages });
+            }
+            break;
+          }
+        }
+      }
+
       // --- Input Transcription (user speech) — Streaming into single consolidated message ---
       if (response.serverContent?.inputTranscription?.text) {
         const userText = response.serverContent.inputTranscription.text.trim();
@@ -1333,12 +1403,23 @@ export class GeminiLiveWebSocketClient {
       const startTime = Math.max(this.playbackContext.currentTime, this.nextPlayTime);
       source.start(startTime);
       this.nextPlayTime = startTime + audioBuffer.duration;
+
+      // Track active audio source so it can be halted instantly on interruption (Barge-in)
+      this.activeAudioSources.push(source);
+      source.onended = () => {
+        const idx = this.activeAudioSources.indexOf(source);
+        if (idx !== -1) this.activeAudioSources.splice(idx, 1);
+        if (this.activeAudioSources.length === 0) {
+          this._setModelSpeaking(false);
+        }
+      };
     } catch (err) {
       wsTracer.error("PLAYBACK", "PCM audio play error", err);
     }
   }
 
   private stopPlaybackContext() {
+    this.stopAllBufferedAudio();
     if (this.playbackContext && this.playbackContext.state !== "closed") {
       this.playbackContext.close().catch(() => {});
       this.playbackContext = null;
@@ -1360,13 +1441,18 @@ export class GeminiLiveWebSocketClient {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          // Prefer 48kHz for best quality before worklet resamples to 16kHz
+          channelCount: { ideal: 1 },
+          echoCancellation: { ideal: true },
+          noiseSuppression: { ideal: true },
+          autoGainControl: { ideal: true },
+          // @ts-ignore - Android Chrome hardware DSP
+          googEchoCancellation: true,
+          // @ts-ignore
+          googAutoGainControl: true,
+          // @ts-ignore
+          googNoiseSuppression: true,
           sampleRate: { ideal: 48000 },
-          channelCount: { exact: 1 },
-        },
+        } as MediaTrackConstraints,
       });
 
       wsTracer.log("MIC", "✅ Microphone stream started");
@@ -1398,12 +1484,21 @@ export class GeminiLiveWebSocketClient {
         channelInterpretation: "discrete",
       });
 
-      // ── Receive PCM chunks and volume updates from the worklet ────────
+      // ── Receive PCM chunks, volume updates, and barge-in from the worklet ────────
       this.recorderWorkletNode.port.onmessage = (event) => {
         const msg = event.data;
 
-        if (msg.type === "PCM_CHUNK") {
+        if (msg.type === "BARGE_IN") {
+          wsTracer.log("BARGE_IN", "🎤 Local barge-in detected in AudioWorklet — stopping active model playback");
+          this.stopAllBufferedAudio();
+        } else if (msg.type === "PCM_CHUNK") {
           if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.isSetupComplete) return;
+
+          // 🛡️ Mobile backpressure protection: drop chunks if WebSocket buffer is clogged
+          if (this.ws.bufferedAmount > 16384) {
+            wsTracer.warn("NET", `WebSocket bufferedAmount high (${this.ws.bufferedAmount} bytes) — dropping audio chunk to prevent network lag`);
+            return;
+          }
 
           // Zero-copy: msg.buffer is a Transferable ArrayBuffer (Int16Array data)
           const base64 = this.arrayBufferToBase64(msg.buffer);
@@ -1453,6 +1548,14 @@ export class GeminiLiveWebSocketClient {
   /** Stop mic stream */
   private stopMicrophoneStream() {
     wsTracer.log("MIC", `Stopping mic stream (total chunks sent: ${this.audioChunksSent})`);
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isSetupComplete) {
+      try {
+        this.ws.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
+        wsTracer.log("MIC", "Sent audioStreamEnd signal to server");
+      } catch (e) {
+        wsTracer.warn("MIC", "Failed to send audioStreamEnd", e);
+      }
+    }
     if (this.animFrameId) {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
