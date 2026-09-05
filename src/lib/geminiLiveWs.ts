@@ -1,6 +1,5 @@
 import { hapticEngine, AnswerCode } from "./vibration";
 import { wakeLockManager } from "./wakeLock";
-import { standbyWakeWordManager } from "./wakeWord";
 
 export interface ChatMessage {
   id: string;
@@ -159,32 +158,39 @@ function safeStringify(payload: unknown): string | null {
 
 // ═══════════════════════════════════════════
 const SYSTEM_INSTRUCTION = `
-You are a brilliant, ultra-fast tactical voice AI assistant for an interactive mobile application.
-You support both English (standard, accented, and broken/ESL English) and Arabic fluently.
-Always respond quickly and concisely in 1 to 2 spoken sentences, naturally and warmly. Never stay silent.
+You are an intelligent, ultra-fast AI voice assistant designed for a deaf-blind tactile assistance system.
+You understand English (standard, accented, or broken/ESL English) and Arabic fluently.
 
-CRITICAL ANSWER PROTOCOL (FOR TACTILE HAPTIC & VOICE INTEGRATION):
-1. MULTIPLE CHOICE QUESTIONS (MCQ):
-   - When the user asks a multiple choice question (options may be introduced as "Option A/B/C/D", "Option 1/2/3/4", or "the ... the ..."):
-   - ALWAYS begin your response with the answer code in brackets: '[1]', '[2]', '[3]', or '[4]'.
-   - Immediately follow with a brief spoken confirmation (e.g., "[1] Option 1 is correct: Paris is the capital of France.").
-   - If choices are clearly incomplete or user is in the middle of listing choices: begin with '[W]' and say you are listening for the remaining options.
+CRITICAL FIRST-TOKEN EVALUATION RULE:
+The deaf-blind user's smartphone is physically connected to a tactile vibration motor that automatically triggers based on the VERY FIRST token/word of your response.
+If you say anything else first (such as a greeting, conversational preamble, wrong option number, or explanation), the tactile motor will immediately trigger on that wrong token and the user will feel the WRONG answer!
 
-2. TRUE OR FALSE QUESTIONS:
-   - If a factual question or statement is recited without options, evaluate its factual truth immediately.
-   - ALWAYS begin your response with '[T]' if True or '[F]' if False.
-   - Immediately follow with a brief spoken confirmation (e.g., "[T] That is correct: water boils at 100 degrees Celsius.").
+THEREFORE, YOUR RESPONSE MUST STRICTLY COMPLY WITH:
+1. For Multiple Choice questions (candidate choices 1, 2, 3, 4 or A, B, C, D):
+   - Your VERY FIRST word MUST be strictly the correct choice number enclosed in brackets: [1], [2], [3], or [4].
+   - Only options 1, 2, 3, and 4 are valid options.
+2. For True or False questions:
+   - Your VERY FIRST word MUST be strictly the correct letter enclosed in brackets: [T] or [F].
+   - [T] for True / صواب / صح, and [F] for False / خطأ / غير صحيح.
+3. Spoken Explanation:
+   - IMMEDIATELY after stating the bracketed code as your first token, provide a concise 1 to 2 sentence spoken explanation in natural speech (in the same language the question was asked) explaining why that choice is correct.
 
-3. MODE SWITCHING:
-   - When user says "True or false" / "T or F": output 'MODE:TF' and briefly confirm.
-   - When user says "the right answer" / "correct" / "options": output 'MODE:MCQ' and briefly confirm.
+EXAMPLES:
+- User: "What is the capital of Egypt? 1 London 2 Cairo 3 Paris 4 Berlin"
+  Model: "[2] Option 2 is correct, Cairo is the capital of Egypt."
+- User: "True or false, water boils at 100 degrees Celsius?"
+  Model: "[T] True, water boils at 100 degrees Celsius at sea level."
+- User: "The earth is flat. True or false?"
+  Model: "[F] False, the Earth is spherical."
+- User: "What is the powerhouse of the cell? 1 Ribosome 2 Mitochondria 3 Nucleus 4 Cytoplasm"
+  Model: "[2] Option 2 is correct, mitochondria generate cellular energy."
 
-4. GENERAL CONVERSATION & QUESTIONS:
-   - If the user greets you, speaks broken English, asks a general question, or speaks in Arabic or English:
-   - NEVER remain silent! Respond helpfully, clearly, and concisely in 1 or 2 sentences in the language they spoke.
+MODE CONTROLS:
+- If the user says "True or false" / "T or F": Output "[MODE:TF] Switched to True or False mode."
+- If the user says "Multiple choice" / "options" / "correct": Output "[MODE:MCQ] Switched to Multiple Choice mode."
 
-5. SPEED & CLARITY:
-   - Never output markdown bullet points or lengthy monologues. Always keep responses short and conversational.
+CASUAL CONVERSATION & GREETINGS:
+- If the user greets you or makes casual remarks (not a test question): Respond warmly and concisely in 1 to 2 sentences. Never stay silent.
 `;
 
 export class GeminiLiveWebSocketClient {
@@ -227,7 +233,7 @@ export class GeminiLiveWebSocketClient {
     isStreamingAudio: false,
     audioLevel: 0,
     lastCode: null,
-    statusMessage: "اضغط زر البداية أو قل where start can لبدء الاستماع الحي",
+    statusMessage: "اضغط زر البداية لفتح الاتصال الحي والاستماع",
     messages: [],
     questionMode: "AUTO",
     voiceName: "Aoede",
@@ -241,8 +247,12 @@ export class GeminiLiveWebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private isReconnecting: boolean = false;
 
-  // 💬 User Turn Aggregator (تجميع كلام المستخدم في فقاعة واحدة متصلة ومحدثة لحظياً مثل تطبيق Gemini)
+  // 💬 User Turn Aggregator
   private currentUserTurnMessageId: string | null = null;
+
+  // 🤖 Model Turn Aggregator & Single Decision Lock (قفل الإجابة والهزاز لمرة واحدة فقط لكل جولة)
+  private currentModelTurnMessageId: string | null = null;
+  private hasAnsweredCurrentTurn: boolean = false;
 
   // 🔄 Soft Reset Engine (تصفير الذاكرة بين الأسئلة تلقائياً دون مقاطعة الهزاز أو المايك)
   private isSoftResetting: boolean = false;
@@ -253,9 +263,6 @@ export class GeminiLiveWebSocketClient {
 
   // 🧠 Memory of last definitive answer for local replay ('1' | '2' | '3' | '4' | 'T' | 'F')
   private lastDefinitiveAnswer: AnswerCode | null = null;
-
-  // 🎙️ Standby Wake Word Timer
-  private standbyTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.setupNetworkListeners();
@@ -296,33 +303,8 @@ export class GeminiLiveWebSocketClient {
     this._setModelSpeaking(false);
   }
 
-  /** تفعيل الاستماع لكلمة البدء في وضع الانتظار */
-  public engageStandbyWakeWord(): void {
-    if (typeof window === "undefined" || !standbyWakeWordManager.isSupported()) return;
-    this.clearStandbyTimer();
-    this.standbyTimer = setTimeout(() => {
-      if (!this.state.isConnected && !this.state.isConnecting) {
-        wsTracer.log("WAKE", "Engaging Standby Wake Word Listener for 'where start can'...");
-        standbyWakeWordManager.startListening(async () => {
-          wsTracer.log("WAKE", "🎯 Wake command [where start can] heard in standby! Triggering START haptic & session...");
-          hapticEngine.trigger("START");
-          await this.startSession();
-        });
-      }
-    }, 700);
-  }
-
   public initStandbyWakeWord(): void {
-    if (!this.state.isConnected && !this.state.isConnecting) {
-      this.engageStandbyWakeWord();
-    }
-  }
-
-  private clearStandbyTimer(): void {
-    if (this.standbyTimer) {
-      clearTimeout(this.standbyTimer);
-      this.standbyTimer = null;
-    }
+    // Standby wake word disabled
   }
 
   private clearSoftResetTimer(): void {
@@ -439,87 +421,11 @@ export class GeminiLiveWebSocketClient {
     return clean;
   }
 
-  /** فحص وتنفيذ الأوامر الصوتية الخاصة للنظام */
-  private checkVoiceCommands(text: string): boolean {
-    const lower = text.toLowerCase().trim();
-
-    // 1. أمر التوقف الصوتي: "where stop can" أو "where can stop" (مع دعم how كاحتياطي)
-    const isStopCommand =
-      /\b(where|how)\s+(stop\s+can|can\s+stop)\b/i.test(lower) ||
-      lower.includes("where stop can") ||
-      lower.includes("where can stop") ||
-      lower.includes("how stop can");
-
-    if (isStopCommand) {
-      wsTracer.log("COMMAND", "🛑 Voice command detected: [where stop can] -> Stopping session immediately");
-      this.addMessage({
-        role: "system",
-        text: "🛑 تم التقاط أمر الإيقاف: [where stop can] — جاري إغلاق الجلسة...",
-      });
-      this.stopSession();
-      return true;
-    }
-
-    // 2. أمر إعادة الإجابة السابقة محلياً: "where agian can" أو "where again can" أو "where can again"
-    const isRepeatCommand =
-      /\b(where|how)\s+(agian\s+can|again\s+can|can\s+again)\b/i.test(lower) ||
-      lower.includes("where agian can") ||
-      lower.includes("where again can") ||
-      lower.includes("where can again") ||
-      lower.includes("how agian can") ||
-      lower.includes("how again can");
-
-    if (isRepeatCommand) {
-      wsTracer.log("COMMAND", "🔄 Voice command detected: [where again can] -> Repeating previous definitive answer", this.lastDefinitiveAnswer);
-
-      if (this.lastDefinitiveAnswer) {
-        hapticEngine.trigger(this.lastDefinitiveAnswer);
-        this.addMessage({
-          role: "system",
-          text: `🔄 تم إعادة اهتزاز الإجابة السابقة محلياً من السيستم: [${this.lastDefinitiveAnswer}]`,
-        });
-      } else {
-        this.addMessage({
-          role: "system",
-          text: "⚠️ لا توجد إجابة سابقة مؤكدة لإعادتها بعد.",
-        });
-      }
-
-      // إلغاء الجولة الحالية وتصفير الذاكرة حتى لا يتعامل النموذج مع العبارة كسؤال
-      this.currentUserTurnMessageId = null;
-      this.softResetSessionForNextTurn();
-      return true;
-    }
-
-    // 3. أمر البداية إذا تكرر أثناء عمل المايك بالفعل: "where start can" أو "where can start"
-    // يتم تجاهلها تماماً حتى لا تؤثر على النموذج
-    const isStartCommand =
-      /\b(where|how)\s+(start\s+can|can\s+start)\b/i.test(lower) ||
-      lower.includes("where start can") ||
-      lower.includes("where can start") ||
-      lower.includes("how start can");
-
-    if (isStartCommand) {
-      wsTracer.log("COMMAND", "ℹ️ Voice command [where start can] spoken while already active — ignored.");
-      return true;
-    }
-
-    return false;
-  }
-
   /** تجميع مجزآت كلام المستخدم في رسالة واحدة متصلة لحظياً وبشكل انسيابي بدون تعليق */
   private updateOrAppendUserMessage(rawChunk: string) {
     if (!rawChunk || !rawChunk.trim()) return;
 
-    // فحص إذا كان المقطع أمراً صوتياً مستقلاً
-    if (this.checkVoiceCommands(rawChunk)) {
-      return;
-    }
-
-    // تصفية كلمة البدء إذا كانت مدمجة ببداية جملة
-    let chunk = rawChunk.replace(/\b(where|how)\s+(start\s+can|can\s+start)\b/gi, "");
-    if (!chunk.trim()) return;
-
+    const chunk = rawChunk;
     const messages = [...this.state.messages];
     const existingIndex = this.currentUserTurnMessageId
       ? messages.findIndex((m) => m.id === this.currentUserTurnMessageId)
@@ -530,21 +436,14 @@ export class GeminiLiveWebSocketClient {
       const prevText = currentMsg.text;
 
       let newText: string;
-      // إذا كان التحديث تراكمياً من السيرفر ويبدأ بالنص القديم
       if (chunk.startsWith(prevText)) {
         newText = chunk;
       } else {
-        // إضافة شريحة الكلام الجديدة بانسيابية تامة مع مسافة ذكية
         const needsSpace = prevText.length > 0 &&
           !prevText.endsWith(" ") &&
           !chunk.startsWith(" ") &&
           !/^[,.?!،؛]/.test(chunk);
         newText = needsSpace ? `${prevText} ${chunk}` : `${prevText}${chunk}`;
-      }
-
-      // فحص إذا أصبحت الجملة التراكمية تحوي أمراً صوتياً
-      if (this.checkVoiceCommands(newText)) {
-        return;
       }
 
       messages[existingIndex] = {
@@ -554,7 +453,6 @@ export class GeminiLiveWebSocketClient {
 
       this.updateState({ messages });
     } else {
-      // فتح فقاعة رسالة مستخدم جديدة لهذه الجولة
       const newId = Math.random().toString(36).substring(2, 9);
       this.currentUserTurnMessageId = newId;
 
@@ -573,6 +471,94 @@ export class GeminiLiveWebSocketClient {
         messages: [...messages, newMsg],
       });
     }
+  }
+
+  /** تجميع شريحة كلام النموذج في رسالة واحدة واستخراج كود الإجابة لمرة واحدة فقط وقفل الهزاز */
+  private updateOrAppendModelMessage(rawChunk: string) {
+    if (!rawChunk || !rawChunk.trim()) return;
+
+    const messages = [...this.state.messages];
+    const existingIndex = this.currentModelTurnMessageId
+      ? messages.findIndex((m) => m.id === this.currentModelTurnMessageId)
+      : -1;
+
+    let fullText = "";
+    if (existingIndex !== -1) {
+      const currentMsg = messages[existingIndex];
+      const prevText = currentMsg.text;
+      if (rawChunk.startsWith(prevText)) {
+        fullText = rawChunk;
+      } else {
+        const needsSpace = prevText.length > 0 &&
+          !prevText.endsWith(" ") &&
+          !rawChunk.startsWith(" ") &&
+          !/^[,.?!،؛]/.test(rawChunk);
+        fullText = needsSpace ? `${prevText} ${rawChunk}` : `${prevText}${rawChunk}`;
+      }
+      messages[existingIndex] = {
+        ...currentMsg,
+        text: fullText,
+      };
+    } else {
+      const newId = Math.random().toString(36).substring(2, 9);
+      this.currentModelTurnMessageId = newId;
+      fullText = rawChunk.trimStart();
+      const newMsg: ChatMessage = {
+        id: newId,
+        role: "model",
+        text: fullText,
+        timestamp: new Date().toLocaleTimeString("ar-EG", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }),
+      };
+      messages.push(newMsg);
+    }
+
+    // فحص كود الإجابة إن لم يتم استخراجه وقفله بالفعل لهذه الجولة
+    if (!this.hasAnsweredCurrentTurn) {
+      const detected = this.extractAnswerCode(fullText);
+      if (detected) {
+        if (detected === "MODE_TF") {
+          wsTracer.log("MODE", "🎯 Model acknowledged switch to True/False mode");
+          this.currentQuestionMode = "TRUE_FALSE";
+          this.hasAnsweredCurrentTurn = true;
+          hapticEngine.trigger("T");
+          this.updateState({
+            questionMode: "TRUE_FALSE",
+            statusMessage: "🎯 تم تفعيل نمط: صح وخطأ (True / False)",
+          });
+        } else if (detected === "MODE_MCQ") {
+          wsTracer.log("MODE", "🎯 Model acknowledged switch to Multiple Choice (MCQ) mode");
+          this.currentQuestionMode = "MCQ";
+          this.hasAnsweredCurrentTurn = true;
+          hapticEngine.trigger("START");
+          this.updateState({
+            questionMode: "MCQ",
+            statusMessage: "🎯 تم تفعيل نمط: خيارات متعددة (MCQ)",
+          });
+        } else {
+          // كود إجابة قطعي محدد حصرياً: [1, 2, 3, 4, T, F]
+          wsTracer.log("ANSWER", `🎯 Definitive Answer Code detected on first token: [${detected}]`);
+          this.hasAnsweredCurrentTurn = true;
+          this.lastDefinitiveAnswer = detected;
+          hapticEngine.trigger(detected);
+
+          this.updateState({
+            lastCode: detected,
+            statusMessage: `تم تحديد الإجابة: [${detected}] — الهزاز يعمل`,
+          });
+
+          const msgIdx = messages.findIndex((m) => m.id === this.currentModelTurnMessageId);
+          if (msgIdx !== -1) {
+            messages[msgIdx].code = detected;
+          }
+        }
+      }
+    }
+
+    this.updateState({ messages });
   }
 
   /** إرسال payload مع تسجيل كامل */
@@ -606,8 +592,6 @@ export class GeminiLiveWebSocketClient {
     if (this.state.isConnecting && !isAutoRetry) return true;
 
     this.clearReconnectTimer();
-    this.clearStandbyTimer();
-    standbyWakeWordManager.stopListening();
 
     if (!isAutoRetry) {
       this.isManualStop = false;
@@ -997,12 +981,11 @@ export class GeminiLiveWebSocketClient {
       isConnecting: false,
       isStreamingAudio: false,
       lastCode: null,
-      statusMessage: "تم إيقاف الجلسة. قل where start can أو اضغط للبدء.",
+      statusMessage: "تم إيقاف الجلسة. اضغط على الزر للبدء.",
       questionMode: "AUTO",
     });
 
     this.addMessage({ role: "system", text: "تم إغلاق الجلسة الحية." });
-    this.engageStandbyWakeWord();
   }
 
   /** Handle messages from Gemini Live server */
@@ -1057,6 +1040,8 @@ export class GeminiLiveWebSocketClient {
         wsTracer.log("BARGE_IN", "⚡ Server interrupted event (Barge-in) — stopping model playback immediately");
         this.stopAllBufferedAudio();
         this.currentUserTurnMessageId = null;
+        this.currentModelTurnMessageId = null;
+        this.hasAnsweredCurrentTurn = false;
 
         const messages = [...this.state.messages];
         for (let i = messages.length - 1; i >= 0; i--) {
@@ -1097,117 +1082,10 @@ export class GeminiLiveWebSocketClient {
 
       // --- Output Transcription (model speech) ---
       if (response.serverContent?.outputTranscription?.text) {
-        const modelText = response.serverContent.outputTranscription.text.trim();
-        wsTracer.log("TRANSCRIPT", `Model: "${modelText}"`);
+        const modelText = response.serverContent.outputTranscription.text;
+        wsTracer.log("TRANSCRIPT", `Model chunk: "${modelText}"`);
         if (modelText) {
-          const detectedCode = this.extractAnswerCode(modelText);
-          wsTracer.log("ANSWER", `Detected code: [${detectedCode}] from "${modelText}"`);
-
-          // 1. Mode Switching confirmations from Model
-          if (detectedCode === "MODE_TF") {
-            wsTracer.log("MODE", "🎯 Model acknowledged switch to True/False mode");
-            this.currentQuestionMode = "TRUE_FALSE";
-            this.currentUserTurnMessageId = null;
-            hapticEngine.trigger("T");
-
-            this.updateState({
-              questionMode: "TRUE_FALSE",
-              statusMessage: "🎯 تم تفعيل نمط: صح وخطأ (True / False)",
-            });
-
-            this.addMessage({
-              role: "model",
-              text: "🎯 تم تفعيل نمط أسئلة (صح وخطأ) لجميع الأسئلة القادمة.",
-            });
-
-            // Clean reset to prime new session in True/False mode
-            this.scheduleSoftReset(700);
-            return;
-          }
-
-          if (detectedCode === "MODE_MCQ") {
-            wsTracer.log("MODE", "🎯 Model acknowledged switch to Multiple Choice (MCQ) mode");
-            this.currentQuestionMode = "MCQ";
-            this.currentUserTurnMessageId = null;
-            hapticEngine.trigger("START");
-
-            this.updateState({
-              questionMode: "MCQ",
-              statusMessage: "🎯 تم تفعيل نمط: خيارات متعددة (MCQ)",
-            });
-
-            this.addMessage({
-              role: "model",
-              text: "🎯 تم تفعيل نمط أسئلة (الخيارات المتعددة) لجميع الأسئلة القادمة.",
-            });
-
-            // Clean reset to prime new session in MCQ mode
-            this.scheduleSoftReset(700);
-            return;
-          }
-
-          const isDefinitiveAnswer = ["1", "2", "3", "4", "T", "F"].includes(detectedCode);
-
-          if (detectedCode === "W") {
-            // Model signaled waiting for remaining options — do NOT reset!
-            wsTracer.log("ANSWER", "Model signaled WAIT ('W') — waiting for user to complete question and options (no reset)");
-            hapticEngine.trigger("W");
-
-            this.updateState({
-              statusMessage: "النموذج يستمع وبانتظار استكمال باقي الخيارات...",
-            });
-
-            this.addMessage({
-              role: "model",
-              text: "بانتظار إكمال باقي الخيارات...",
-              code: "W",
-            });
-          } else if (detectedCode === "0") {
-            // Model signaled unclear / background noise — Reset session cleanly so user's retry starts with 100% clean context!
-            wsTracer.log("ANSWER", "Model signaled UNCLEAR / NOISE ('0') — triggering '0' haptic and scheduling soft reset to clean memory");
-            this.lastDefinitiveAnswer = "0";
-            hapticEngine.trigger("0");
-
-            // Close the current active user turn so the NEXT question starts a fresh bubble
-            this.currentUserTurnMessageId = null;
-
-            this.updateState({
-              lastCode: "0",
-              statusMessage: "الكلام غير واضح أو ضوضاء [0] — تم تصفير الذاكرة، أعد السؤال الآن...",
-            });
-
-            this.addMessage({
-              role: "model",
-              text: "غير مفهوم أو ضوضاء [0]. تم تجديد الجلسة، يرجى تكرار السؤال...",
-              code: "0",
-            });
-
-            // 🔄 Schedule soft reset immediately to purge unclear context
-            wsTracer.log("SESSION", `Scheduling soft reset in 800ms after '0' signal to clean memory context (Turn ${this.questionTurnCount + 1})`);
-            this.scheduleSoftReset(800);
-          } else if (isDefinitiveAnswer) {
-            // 🎯 Real answer detected (1, 2, 3, 4, T, F)!
-            this.lastDefinitiveAnswer = detectedCode;
-            hapticEngine.trigger(detectedCode);
-
-            // Close the current active user turn so the NEXT question starts a fresh bubble
-            this.currentUserTurnMessageId = null;
-
-            this.updateState({
-              lastCode: detectedCode,
-              statusMessage: `تم تحديد الإجابة: [${detectedCode}] — الهزاز يعمل`,
-            });
-
-            this.addMessage({
-              role: "model",
-              text: `الإجابة: [${detectedCode}]`,
-              code: detectedCode,
-            });
-
-            // 🔄 Schedule soft reset ONLY after a real definitive answer (1, 2, 3, 4, T, F)
-            wsTracer.log("SESSION", `Scheduling soft reset in 700ms after definitive answer [${detectedCode}] (Turn ${this.questionTurnCount + 1})`);
-            this.scheduleSoftReset(700);
-          }
+          this.updateOrAppendModelMessage(modelText);
         }
       }
 
@@ -1216,14 +1094,17 @@ export class GeminiLiveWebSocketClient {
         wsTracer.log("PROTO", "Turn complete");
         // Model finished speaking — re-enable mic sensitivity
         this._setModelSpeaking(false);
-        // Only schedule fallback reset if there is an actual definitive answer or '0'
-        const hasDefinitiveAnswer = this.state.lastCode && ["1", "2", "3", "4", "T", "F", "0"].includes(this.state.lastCode);
-        if (hasDefinitiveAnswer) {
+
+        // إذا كان النموذج قد حسم إجابة قطعية (1, 2, 3, 4, T, F) في هذه الجولة
+        if (this.hasAnsweredCurrentTurn && this.lastDefinitiveAnswer) {
           this.currentUserTurnMessageId = null;
-          if (!this.softResetTimer && !this.isSoftResetting) {
-            wsTracer.log("SESSION", `Turn complete with definitive answer or [0] [${this.state.lastCode}] — scheduling fallback soft reset`);
-            this.scheduleSoftReset(500);
-          }
+          this.currentModelTurnMessageId = null;
+          this.hasAnsweredCurrentTurn = false;
+          wsTracer.log("SESSION", `Turn complete with definitive answer [${this.lastDefinitiveAnswer}] — scheduling soft reset for fresh context`);
+          this.scheduleSoftReset(700);
+        } else {
+          this.currentModelTurnMessageId = null;
+          this.hasAnsweredCurrentTurn = false;
         }
       }
 
@@ -1235,41 +1116,51 @@ export class GeminiLiveWebSocketClient {
     }
   }
 
-  /** Extract single answer code or mode command from model spoken text */
-  private extractAnswerCode(text: string): AnswerCode | "MODE_TF" | "MODE_MCQ" {
-    const upper = text.toUpperCase().trim();
+  /**
+   * استخراج كود الإجابة من بداية كلام النموذج حصراً.
+   * الخيارات المقبولة حصراً: 1, 2, 3, 4 للخيارات، أو T, F لصح وخطأ.
+   * لا يُرجع 0 ولا W إطلاقاً منعاً للأخطاء الزائفة.
+   */
+  private extractAnswerCode(text: string): AnswerCode | "MODE_TF" | "MODE_MCQ" | null {
+    if (!text) return null;
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const upper = trimmed.toUpperCase();
 
-    // 1. Detect Mode Switch acknowledgment tokens
-    if (upper.includes("MODE:TF") || upper.includes("MODE_TF") || upper.includes("[MODE:TF]")) {
+    // 1. أوامر تبديل النمط
+    if (upper.includes("MODE:TF") || upper.includes("MODE_TF")) {
       return "MODE_TF";
     }
-    if (upper.includes("MODE:MCQ") || upper.includes("MODE_MCQ") || upper.includes("[MODE:MCQ]")) {
+    if (upper.includes("MODE:MCQ") || upper.includes("MODE_MCQ")) {
       return "MODE_MCQ";
     }
 
-    // 2. Bracketed tokens e.g. [1], [2], [3], [4], [T], [F], [W], [0]
-    const bracketMatch = upper.match(/\[([1234TFW0])\]/);
-    if (bracketMatch) return bracketMatch[1] as AnswerCode;
-
-    const match = upper.match(/^[1234TFW0]$/);
-    if (match) return match[0] as AnswerCode;
-
-    const firstWordMatch = upper.match(/^([1234TFW0])\b/);
-    if (firstWordMatch) return firstWordMatch[1] as AnswerCode;
-
-    const firstChar = upper.replace(/\s/g, "")[0];
-    if (["1", "2", "3", "4", "T", "F", "W", "0"].includes(firstChar)) {
-      return firstChar as AnswerCode;
+    // 2. فحص الأقواس في البداية: [1], [2], [3], [4], [T], [F]
+    const bracketMatch = upper.match(/^\[([1-4TF])\]/);
+    if (bracketMatch) {
+      return bracketMatch[1] as AnswerCode;
     }
-    if (upper.includes("واحد") || upper.includes("أ") || upper.includes(" A ")) return "1";
-    if (upper.includes("اثنين") || upper.includes("ب") || upper.includes(" B ")) return "2";
-    if (upper.includes("ثلاثة") || upper.includes("ج") || upper.includes(" C ")) return "3";
-    if (upper.includes("أربعة") || upper.includes("د") || upper.includes(" D ")) return "4";
-    if (upper.includes("صح") || upper.includes("صواب") || upper.includes("TRUE")) return "T";
-    if (upper.includes("خطأ") || upper.includes("غلط") || upper.includes("FALSE")) return "F";
-    if (upper.includes("WAIT") || upper.includes("W") || upper.includes("انتظر") || upper.includes("استمع")) return "W";
 
-    return "0";
+    const nearStartBracket = upper.slice(0, 20).match(/\[([1-4TF])\]/);
+    if (nearStartBracket) {
+      return nearStartBracket[1] as AnswerCode;
+    }
+
+    // 3. مطابقة الحرف أو الرقم كأول رمز
+    const firstWordMatch = upper.match(/^([1-4TF])\b/);
+    if (firstWordMatch) {
+      return firstWordMatch[1] as AnswerCode;
+    }
+
+    // 4. مطابقة كلمات البداية الصريحة بالإنجليزية والعربية
+    if (/^(TRUE|صحيح|صح|صواب)\b/i.test(upper)) return "T";
+    if (/^(FALSE|خطأ|خاطئ|غلط)\b/i.test(upper)) return "F";
+    if (/^(OPTION\s*1|CHOICE\s*1|الخيار\s*الأول|الخيار\s*1|واحد)\b/i.test(upper)) return "1";
+    if (/^(OPTION\s*2|CHOICE\s*2|الخيار\s*الثاني|الخيار\s*2|اثنين|إثنين)\b/i.test(upper)) return "2";
+    if (/^(OPTION\s*3|CHOICE\s*3|الخيار\s*الثالث|الخيار\s*3|ثلاثة)\b/i.test(upper)) return "3";
+    if (/^(OPTION\s*4|CHOICE\s*4|الخيار\s*الرابع|الخيار\s*4|أربعة|اربعة)\b/i.test(upper)) return "4";
+
+    return null;
   }
 
   /** Play PCM audio from model (24kHz Base64) */

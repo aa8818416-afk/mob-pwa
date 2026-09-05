@@ -85,8 +85,6 @@ export default function Home() {
       });
     }
 
-    // 5. Initialize Standby Wake Word Listener for 'how start can'
-    geminiLiveWs.initStandbyWakeWord();
   }, []);
 
   // Auto-scroll chat to bottom
@@ -262,31 +260,23 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Voice Command Quick Hints */}
+        {/* Quick Answer Codes & Modes Indicator */}
         <div className="flex flex-wrap items-center justify-center gap-1.5 mb-4 text-[11px] text-slate-400 max-w-md">
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
-            <span className="font-mono text-cyan-400 font-bold">where start can</span>
-            <span className="text-slate-300">بدء</span>
+            <span className="font-mono text-cyan-400 font-bold">[1] [2] [3] [4]</span>
+            <span className="text-slate-300">خيارات متعددة</span>
           </span>
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
-            <span className="font-mono text-rose-400 font-bold">where stop can</span>
-            <span className="text-slate-300">إيقاف</span>
-          </span>
-          <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
-            <span className="font-mono text-emerald-400 font-bold">done</span>
-            <span className="text-slate-300">إنهاء السؤال فوراً</span>
+            <span className="font-mono text-emerald-400 font-bold">[T] / [F]</span>
+            <span className="text-slate-300">صح أو خطأ</span>
           </span>
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
             <span className="font-mono text-amber-400 font-bold">True or false</span>
             <span className="text-slate-300">نمط صح/خطأ</span>
           </span>
           <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
-            <span className="font-mono text-sky-400 font-bold">correct</span>
+            <span className="font-mono text-sky-400 font-bold">correct / options</span>
             <span className="text-slate-300">نمط خيارات</span>
-          </span>
-          <span className="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 flex items-center gap-1.5 shadow-sm">
-            <span className="font-mono text-purple-400 font-bold">the</span>
-            <span className="text-slate-300">فاصل الخيارات</span>
           </span>
         </div>
 
