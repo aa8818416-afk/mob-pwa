@@ -42,7 +42,7 @@ export default function Home() {
     messages: [],
     questionMode: "AUTO",
     voiceName: "Aoede",
-    thinkingBudget: 2000,
+    thinkingBudget: "dynamic",
   });
 
   const [isVibrating, setIsVibrating] = useState<boolean>(false);

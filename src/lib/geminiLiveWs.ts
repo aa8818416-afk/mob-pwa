@@ -159,80 +159,32 @@ function safeStringify(payload: unknown): string | null {
 
 // ═══════════════════════════════════════════
 const SYSTEM_INSTRUCTION = `
-You are an ultra-fast tactical AI assistant designed specifically for a deaf-blind user communicating via tactile haptic vibrations on a mobile smartphone.
-The user speaks in English. All spoken input, questions, options, and commands are in English.
-The user receives output strictly as tactile physical vibrations (or mode confirmations) on the smartphone.
+You are a brilliant, ultra-fast tactical voice AI assistant for an interactive mobile application.
+You support both English (standard, accented, and broken/ESL English) and Arabic fluently.
+Always respond quickly and concisely in 1 to 2 spoken sentences, naturally and warmly. Never stay silent.
 
-═══════════════════════════════════════════════════════════════════════════════
-CRITICAL DIRECTIVES WITH SYSTEM RATIONALES (READ CAREFULLY):
-═══════════════════════════════════════════════════════════════════════════════
+CRITICAL ANSWER PROTOCOL (FOR TACTILE HAPTIC & VOICE INTEGRATION):
+1. MULTIPLE CHOICE QUESTIONS (MCQ):
+   - When the user asks a multiple choice question (options may be introduced as "Option A/B/C/D", "Option 1/2/3/4", or "the ... the ..."):
+   - ALWAYS begin your response with the answer code in brackets: '[1]', '[2]', '[3]', or '[4]'.
+   - Immediately follow with a brief spoken confirmation (e.g., "[1] Option 1 is correct: Paris is the capital of France.").
+   - If choices are clearly incomplete or user is in the middle of listing choices: begin with '[W]' and say you are listening for the remaining options.
 
-1. SYSTEM PURPOSE & LATENCY PRINCIPLE:
-- RATIONALE: The user cannot see or hear model explanations. Every unnecessary word or incorrect character creates confusing, wrong physical vibrations on the user's hand. Speed and precision are paramount.
-- DIRECTIVE: Output ONLY the exact single character answer code ('1', '2', '3', '4', 'T', 'F', 'W', '0') or the exact mode acknowledgment token ('MODE:TF', 'MODE:MCQ'). Never output pleasantries, conversational speech, markdown, explanations, or quotes.
+2. TRUE OR FALSE QUESTIONS:
+   - If a factual question or statement is recited without options, evaluate its factual truth immediately.
+   - ALWAYS begin your response with '[T]' if True or '[F]' if False.
+   - Immediately follow with a brief spoken confirmation (e.g., "[T] That is correct: water boils at 100 degrees Celsius.").
 
-2. DYNAMIC MODE SWITCHING ('MODE:TF' vs 'MODE:MCQ'):
-- RATIONALE: Exams often feature blocks of True/False questions followed by Multiple Choice questions. Explicit mode switching enables immediate, accurate answering without unnecessary option-waiting delays.
-- SWITCH TO TRUE/FALSE MODE:
-  * When the user dictates "True or false" (or "True and false", "T or F") as a mode instruction:
-  * You MUST output strictly: MODE:TF
-  * From this point forward, assume all subsequent utterances are True/False statements until switched.
-- SWITCH TO MULTIPLE CHOICE (MCQ) MODE:
-  * When the user dictates "the right answer", "correct", or "options" as a mode instruction:
-  * You MUST output strictly: MODE:MCQ
-  * From this point forward, expect multiple choice questions with candidate choices.
+3. MODE SWITCHING:
+   - When user says "True or false" / "T or F": output 'MODE:TF' and briefly confirm.
+   - When user says "the right answer" / "correct" / "options": output 'MODE:MCQ' and briefly confirm.
 
-3. CANDIDATE CHOICES & MULTIPLE CHOICE QUESTIONS (MCQ):
-- RATIONALE: When options are provided, answering prematurely after hearing only 1, 2, or 3 options triggers the wrong answer vibration. All candidate choices must be evaluated.
-- CANDIDATE CHOICE DELIMITER 'THE': The speaker introduces candidate choices sequentially using the English prefix "the" before each choice, or standard enumerations (e.g. "Option A", "Option 1", "A", "B", etc.).
-- SEMANTIC CONTEXT & DISCRIMINATION:
-  * Distinguish between "the" belonging to the question's grammatical structure vs. "the" introducing candidate choices. The candidate choices begin AFTER the question stem.
-  * 1st candidate choice -> Option 1 (A)
-  * 2nd candidate choice -> Option 2 (B)
-  * 3rd candidate choice -> Option 3 (C)
-  * 4th candidate choice -> Option 4 (D)
-  * NATURAL 'THE' IN PROPER NOUNS: If a candidate answer naturally starts with 'the' (e.g. "The Pacific Ocean", "The White House", "The Nile"), one single 'the' counts as both the delimiter and the name. The speaker will NOT say 'the the'.
-- WAITING CODE 'W': If the speaker is dictating an MCQ question and has begun stating candidate choices, but has NOT yet completed all candidate choices, output 'W' (Waiting). NEVER guess an answer or output '0' while choices are in progress.
+4. GENERAL CONVERSATION & QUESTIONS:
+   - If the user greets you, speaks broken English, asks a general question, or speaks in Arabic or English:
+   - NEVER remain silent! Respond helpfully, clearly, and concisely in 1 or 2 sentences in the language they spoke.
 
-4. ABSENCE OF CHOICES = AUTOMATIC TRUE / FALSE EVALUATION:
-- RATIONALE: In oral tests and classroom settings, if a speaker recites a question or factual statement without reciting ANY candidate options (no "the" options, no A/B/C/D, no 1/2/3/4), it is logically a True/False question because no alternative choices exist to choose from! Waiting for 4 choices in this case causes silent stalling and failure.
-- DIRECTIVE:
-  * If the speaker recites a question or statement and DOES NOT provide candidate choices by any method:
-  * DO NOT wait for 4 options! DO NOT output 'W'!
-  * Use your semantic intelligence: evaluate the factual truth of the statement or question immediately.
-  * If True -> output 'T'.
-  * If False -> output 'F'.
-  * If the statement is completely incomplete (cut off mid-sentence without completing a thought) and no "done" is spoken, wait for the speaker to complete the sentence or say "done".
-
-5. STAND-ALONE "DONE" AS END-OF-INPUT TRIGGER:
-- RATIONALE: The user speaks the word "done" to eliminate silence latency and signal that dictation of the question and any options is 100% complete.
-- CONTEXTUAL DISCRIMINATION:
-  * STAND-ALONE CLOSING SIGNAL: If the word "done" appears at the end of the question or after the options without any further words spoken after it, it is a definitive CLOSING SIGNAL. Stop listening, evaluate all received text, and output the final answer code ('1', '2', '3', '4', 'T', or 'F') IMMEDIATELY without hesitation.
-  * GRAMMATICAL / IN-SENTENCE "DONE": If "done" is part of the grammatical sentence structure (e.g. "Has the work been done?", "The experiment was done by Newton", "well done"), or if the speaker continues dictating additional words after "done", treat it as a standard word within the question text and do NOT treat it as a closing signal.
-
-6. MULTI-TALKER, SIDE-TALK & AMBIENT NOISE FILTERING:
-- Actively filter out background chatter, room noise, and side talk. Skillfully isolate ONLY the core test question and the candidate answers.
-- IMMEDIATE TRIGGER WHEN COMPLETE: The moment you have identified the complete question and candidate options (or the True/False statement), output the single answer character immediately.
-- UNCLEAR / NOISE CODE '0': Output '0' ONLY if speech is completely over but entirely unintelligible, inaudible, or pure background noise.
-
-7. STRICT ENGLISH SCRIPT:
-- Transcribe and evaluate speech strictly in standard English Latin script (A-Z). Never transcribe into Arabic script.
-
-8. OUTPUT RULES — STRICTLY 1 SINGLE ASCII CHARACTER OR MODE TOKEN:
-Output ONLY one of the following tokens and NOTHING else:
-- '1' : Correct answer is Option 1 / First candidate / (A) / (1).
-- '2' : Correct answer is Option 2 / Second candidate / (B) / (2).
-- '3' : Correct answer is Option 3 / Third candidate / (C) / (3).
-- '4' : Correct answer is Option 4 / Fourth candidate / (D) / (4).
-- 'T' : If the statement is True.
-- 'F' : If the statement is False.
-- 'W' : If candidate choices have begun but are still in progress / waiting for remaining options.
-- '0' : ONLY if speech is completely over but entirely unintelligible, inaudible, or pure background noise.
-- 'MODE:TF'  : Acknowledged switch to True/False mode.
-- 'MODE:MCQ' : Acknowledged switch to Multiple Choice mode.
-
-Rules:
-1. NEVER output words, markdown, punctuation, explanations, or quotes. ONLY the single character or mode token.
+5. SPEED & CLARITY:
+   - Never output markdown bullet points or lengthy monologues. Always keep responses short and conversational.
 `;
 
 export class GeminiLiveWebSocketClient {
@@ -264,7 +216,7 @@ export class GeminiLiveWebSocketClient {
 
   // 🔊 Voice and Thinking Configuration
   private selectedVoice: string = "Aoede";
-  private selectedThinkingBudget: number | "dynamic" = 2000;
+  private selectedThinkingBudget: number | "dynamic" = "dynamic";
 
   // 🎯 Question Mode Engine (AUTO | TRUE_FALSE | MCQ)
   private currentQuestionMode: QuestionMode = "AUTO";
@@ -279,7 +231,7 @@ export class GeminiLiveWebSocketClient {
     messages: [],
     questionMode: "AUTO",
     voiceName: "Aoede",
-    thinkingBudget: 2000,
+    thinkingBudget: "dynamic",
   };
 
   // 🔄 Auto-Reconnect Engine
@@ -555,19 +507,18 @@ export class GeminiLiveWebSocketClient {
     return false;
   }
 
-  /** تجميع مجزآت كلام المستخدم في رسالة واحدة متصلة لحظياً مثل تطبيق Gemini */
+  /** تجميع مجزآت كلام المستخدم في رسالة واحدة متصلة لحظياً وبشكل انسيابي بدون تعليق */
   private updateOrAppendUserMessage(rawChunk: string) {
-    let chunk = this.sanitizeAndNormalizeTranscript(rawChunk);
-    if (!chunk) return;
+    if (!rawChunk || !rawChunk.trim()) return;
 
     // فحص إذا كان المقطع أمراً صوتياً مستقلاً
-    if (this.checkVoiceCommands(chunk)) {
+    if (this.checkVoiceCommands(rawChunk)) {
       return;
     }
 
     // تصفية كلمة البدء إذا كانت مدمجة ببداية جملة
-    chunk = chunk.replace(/\b(where|how)\s+(start\s+can|can\s+start)\b/gi, "").trim();
-    if (!chunk) return;
+    let chunk = rawChunk.replace(/\b(where|how)\s+(start\s+can|can\s+start)\b/gi, "");
+    if (!chunk.trim()) return;
 
     const messages = [...this.state.messages];
     const existingIndex = this.currentUserTurnMessageId
@@ -576,36 +527,19 @@ export class GeminiLiveWebSocketClient {
 
     if (existingIndex !== -1) {
       const currentMsg = messages[existingIndex];
-      const prevText = currentMsg.text.trim();
+      const prevText = currentMsg.text;
 
-      let newText = prevText;
-      // إذا كان المقطع الجديد يحتوي النص السابق كاملاً (تحديث تراكمي من السيرفر)
+      let newText: string;
+      // إذا كان التحديث تراكمياً من السيرفر ويبدأ بالنص القديم
       if (chunk.startsWith(prevText)) {
         newText = chunk;
-      } else if (prevText.endsWith(chunk)) {
-        newText = prevText;
       } else {
-        // فحص تداخل الكلمات لمنع تكرار أي كلمة عند الدمج
-        const prevWords = prevText.split(/\s+/);
-        const chunkWords = chunk.split(/\s+/);
-
-        let overlapCount = 0;
-        const maxCheck = Math.min(prevWords.length, chunkWords.length, 5);
-        for (let len = maxCheck; len >= 1; len--) {
-          const prevSlice = prevWords.slice(-len).join(" ").toLowerCase();
-          const chunkSlice = chunkWords.slice(0, len).join(" ").toLowerCase();
-          if (prevSlice === chunkSlice) {
-            overlapCount = len;
-            break;
-          }
-        }
-
-        if (overlapCount > 0) {
-          const remainingChunk = chunkWords.slice(overlapCount).join(" ");
-          newText = remainingChunk ? `${prevText} ${remainingChunk}` : prevText;
-        } else {
-          newText = `${prevText} ${chunk}`;
-        }
+        // إضافة شريحة الكلام الجديدة بانسيابية تامة مع مسافة ذكية
+        const needsSpace = prevText.length > 0 &&
+          !prevText.endsWith(" ") &&
+          !chunk.startsWith(" ") &&
+          !/^[,.?!،؛]/.test(chunk);
+        newText = needsSpace ? `${prevText} ${chunk}` : `${prevText}${chunk}`;
       }
 
       // فحص إذا أصبحت الجملة التراكمية تحوي أمراً صوتياً
@@ -627,7 +561,7 @@ export class GeminiLiveWebSocketClient {
       const newMsg: ChatMessage = {
         id: newId,
         role: "user",
-        text: chunk,
+        text: chunk.trimStart(),
         timestamp: new Date().toLocaleTimeString("ar-EG", {
           hour: "2-digit",
           minute: "2-digit",
@@ -799,9 +733,9 @@ export class GeminiLiveWebSocketClient {
             automaticActivityDetection: {
               disabled: false,
               startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
-              endOfSpeechSensitivity: "END_SENSITIVITY_LOW",
+              endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
               prefixPaddingMs: 300,
-              silenceDurationMs: 2000,
+              silenceDurationMs: 600,
             },
           },
           inputAudioTranscription: {},
@@ -1097,42 +1031,6 @@ export class GeminiLiveWebSocketClient {
           });
         }
 
-        // 🔒 LANGUAGE & MODE ANCHOR CONTEXT SEEDING (تثبيت لغة الاستماع ونمط الأسئلة الحالي عبر الجلسات)
-        let modeHint = "";
-        if (this.currentQuestionMode === "TRUE_FALSE") {
-          modeHint = " Active Question Mode: TRUE/FALSE. All upcoming questions are True/False statements until switched. Evaluate statements immediately as T or F without waiting for candidate options.";
-        } else if (this.currentQuestionMode === "MCQ") {
-          modeHint = " Active Question Mode: MULTIPLE CHOICE. Expect questions with candidate choices.";
-        } else {
-          modeHint = " Active Question Mode: AUTO. If candidate choices are provided, treat as Multiple Choice. If no choices are provided, evaluate as True/False.";
-        }
-
-        const languageAnchorPayload = {
-          clientContent: {
-            turns: [
-              {
-                role: "user",
-                parts: [
-                  {
-                    text: `Language & Mode Lock: All questions and multiple-choice options in this conversation are strictly in English. Transcribe speech strictly in standard English Latin alphabet.${modeHint}`,
-                  },
-                ],
-              },
-              {
-                role: "model",
-                parts: [
-                  {
-                    text: `Understood. Speech recognition is locked to English Latin text.${modeHint}`,
-                  },
-                ],
-              },
-            ],
-            turnComplete: false,
-          },
-        };
-        wsTracer.log("SETUP", "Sending English Language & Mode Anchor turn to lock STT into English and active mode", { mode: this.currentQuestionMode });
-        this.sendPayload("LANG_ANCHOR", languageAnchorPayload);
-
         // Only start mic if this is NOT a soft reset (mic is already streaming during soft reset)
         if (!isSoftResetSetup) {
           this.startMicrophoneStream();
@@ -1349,8 +1247,15 @@ export class GeminiLiveWebSocketClient {
       return "MODE_MCQ";
     }
 
+    // 2. Bracketed tokens e.g. [1], [2], [3], [4], [T], [F], [W], [0]
+    const bracketMatch = upper.match(/\[([1234TFW0])\]/);
+    if (bracketMatch) return bracketMatch[1] as AnswerCode;
+
     const match = upper.match(/^[1234TFW0]$/);
     if (match) return match[0] as AnswerCode;
+
+    const firstWordMatch = upper.match(/^([1234TFW0])\b/);
+    if (firstWordMatch) return firstWordMatch[1] as AnswerCode;
 
     const firstChar = upper.replace(/\s/g, "")[0];
     if (["1", "2", "3", "4", "T", "F", "W", "0"].includes(firstChar)) {
